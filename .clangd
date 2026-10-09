@@ -1,0 +1,5 @@
+# clangd reads the compile database from the debug tree: every target,
+# include path and dependency (nlohmann, httplib, flatbuffers) comes from
+# what CMake actually compiles, so the editor and the build agree.
+CompileFlags:
+  CompilationDatabase: build/debug

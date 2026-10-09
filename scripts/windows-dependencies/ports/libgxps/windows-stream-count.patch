@@ -1,0 +1,11 @@
+--- a/libgxps/gxps-images.c
++++ b/libgxps/gxps-images.c
+@@ -957,7 +957,7 @@
+ 	guchar buffer[buffer_size];
+ 	gsize read_bytes;
+ 	gsize nwritten;
+-	UINT written_bytes;
++	ULONG written_bytes;
+ 	UINT bytes_size = 0;
+ 	BYTE *bytes = NULL;
+ 	WICRect rc_lock;

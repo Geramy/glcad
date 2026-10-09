@@ -1,0 +1,177 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "debug",
+      "displayName": "Debug",
+      "description": "Lightly optimised with full symbols. The default for day-to-day work.",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_FLAGS_DEBUG": "-g -Og",
+        "CMAKE_CXX_FLAGS_DEBUG": "-g -Og"
+      }
+    },
+    {
+      "name": "release",
+      "displayName": "Release",
+      "description": "Optimised, no symbols. Use for timing, not for stepping.",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "relwithdebinfo",
+      "displayName": "Release + symbols",
+      "description": "Optimised but debuggable. What the soak tier should run.",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
+      "name": "asan",
+      "displayName": "Debug + ASan/UBSan",
+      "description": "Address and undefined-behaviour sanitizers.",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined"
+      }
+    },
+    {
+      "name": "novulkan",
+      "displayName": "Debug, no Vulkan",
+      "description": "Everything except the app shell. Builds anywhere.",
+      "inherits": "debug",
+      "cacheVariables": {
+        "GLCAD_BUILD_VULKAN": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "debug",
+      "displayName": "Debug",
+      "configurePreset": "debug"
+    },
+    {
+      "name": "release",
+      "displayName": "Release",
+      "configurePreset": "release"
+    },
+    {
+      "name": "relwithdebinfo",
+      "displayName": "Release + symbols",
+      "configurePreset": "relwithdebinfo"
+    },
+    {
+      "name": "asan",
+      "displayName": "ASan/UBSan",
+      "configurePreset": "asan"
+    },
+    {
+      "name": "novulkan",
+      "displayName": "No Vulkan",
+      "configurePreset": "novulkan"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "fast",
+      "displayName": "fast (~10 ms)",
+      "description": "Every build. Roughly 135k checks.",
+      "configurePreset": "debug",
+      "filter": {
+        "include": {
+          "label": "fast"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": false
+      }
+    },
+    {
+      "name": "full",
+      "displayName": "full (~215 ms)",
+      "description": "Pre-commit and CI. Roughly 5.7M checks.",
+      "configurePreset": "debug",
+      "filter": {
+        "include": {
+          "label": "full"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": false
+      }
+    },
+    {
+      "name": "soak-release",
+      "displayName": "soak, optimised",
+      "description": "The soak volume in an optimised build. Needs the relwithdebinfo preset configured first.",
+      "configurePreset": "relwithdebinfo",
+      "filter": {
+        "include": {
+          "label": "soak"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": false
+      }
+    },
+    {
+      "name": "soak",
+      "displayName": "soak (20x full)",
+      "description": "Nightly. Same build as the other two tiers, so a failure here is comparable with a failure there.",
+      "configurePreset": "debug",
+      "filter": {
+        "include": {
+          "label": "soak"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": false
+      }
+    }
+  ],
+  "packagePresets": [
+    {
+      "name": "macos",
+      "displayName": "macOS installers (DMG + ZIP into build/release/installers)",
+      "configurePreset": "release"
+    }
+  ]
+}

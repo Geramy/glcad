@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=GLCAD
+Comment=Precision 2D/3D CAD
+Exec=glcad
+Terminal=false
+Categories=Graphics;Engineering;

@@ -1,0 +1,62 @@
+--- a/meson.build
++++ b/meson.build
+@@ -1,4 +1,4 @@
+-project('libgxps', 'c',
++project('libgxps', 'c', 'cpp',
+         version: '0.3.2',
+         default_options: [
+           'buildtype=debugoptimized'
+--- a/libgxps/meson.build
++++ b/libgxps/meson.build
+@@ -73,7 +73,8 @@
+   common_ldflags = [ '-Wl,-Bsymbolic' ]
+ endif
+ 
+-gxps = shared_library('gxps',
++gxps = library('gxps',
++                      link_language: 'cpp',
+                       include_directories: core_inc,
+                       sources: sources + headers + private_headers + [ gxps_version_h ],
+                       soversion: soversion,
+--- a/tools/meson.build
++++ b/tools/meson.build
+@@ -30,6 +30,7 @@
+   ]
+ 
+   executable('xpstopng', xpstopng_sources,
++             link_language: 'cpp',
+              dependencies: gxps_tools_dep,
+              install: true,
+              c_args: [
+@@ -48,6 +49,7 @@
+   ]
+ 
+   executable('xpstojpeg', xpstojpeg_sources,
++             link_language: 'cpp',
+              dependencies: gxps_tools_dep,
+              install: true,
+              c_args: [
+@@ -64,6 +66,7 @@
+   ]
+ 
+   executable('xpstopdf', xpstopdf_sources,
++             link_language: 'cpp',
+              dependencies: gxps_tools_dep,
+              install: true,
+              c_args: [
+@@ -80,6 +83,7 @@
+   ]
+ 
+   executable('xpstops', xpstops_sources,
++             link_language: 'cpp',
+              dependencies: gxps_tools_dep,
+              install: true,
+              c_args: [
+@@ -96,6 +100,7 @@
+   ]
+ 
+   executable('xpstosvg', xpstosvg_sources,
++             link_language: 'cpp',
+              dependencies: gxps_tools_dep,
+              install: true,
+              c_args: [

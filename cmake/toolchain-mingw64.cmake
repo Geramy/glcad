@@ -1,0 +1,17 @@
+# MinGW-w64 cross toolchain; the runtime is linked statically (no MinGW DLLs).
+set(CMAKE_SYSTEM_NAME Windows)
+set(CMAKE_SYSTEM_PROCESSOR x86_64)
+if(NOT CMAKE_C_COMPILER)
+  set(CMAKE_C_COMPILER x86_64-w64-mingw32-gcc)
+endif()
+if(NOT CMAKE_CXX_COMPILER)
+  set(CMAKE_CXX_COMPILER x86_64-w64-mingw32-g++)
+endif()
+set(CMAKE_RC_COMPILER  x86_64-w64-mingw32-windres)
+# Preserve roots already supplied for target libraries (e.g. vcpkg's tree).
+list(APPEND CMAKE_FIND_ROOT_PATH /opt/homebrew/Cellar/mingw-w64 /opt/homebrew/opt/mingw-w64)
+list(REMOVE_DUPLICATES CMAKE_FIND_ROOT_PATH)
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+set(CMAKE_EXE_LINKER_FLAGS_INIT "-static -static-libgcc -static-libstdc++")

@@ -1,0 +1,243 @@
+namespace glcad.fb;
+
+struct LatticePoint {
+  x: long;
+  y: long;
+}
+
+struct WorkingVolume {
+  extent: double;            // metres, half-width of the cube
+  resolution_bits: int;
+}
+
+enum ShapeKind : ubyte {
+  Point = 0,
+  Segment = 1,
+  Circle = 2,
+  Arc = 3,
+  Polyline = 4,
+  Ellipse = 5,
+  Spline = 6,
+}
+
+struct Shape {
+  kind: ShapeKind;
+  a: LatticePoint;
+  b: LatticePoint;
+  radius: long;
+  start_angle: double;
+  end_angle: double;
+}
+
+enum ColorKind : ubyte { ByLayer = 0, ByBlock = 1, Index = 2, True = 3 }
+
+struct Color {
+  kind: ColorKind;
+  index: int;
+  r: ubyte;
+  g: ubyte;
+  b: ubyte;
+}
+
+table Layer {
+  name: string (required);
+  description: string;
+  on: bool = true;
+  frozen: bool = false;
+  locked: bool = false;
+  plottable: bool = true;
+  color: Color;
+  linetype: string;
+  lineweight: int = -1;          // gdoc::Lineweight, mm x 100
+  transparency: int = 0;
+  plot_style: string;
+  vp_frozen: [uint];
+}
+
+table Dash {
+  length: double;
+  text: string;
+  text_scale: double = 1.0;
+}
+
+table Linetype {
+  name: string (required);
+  description: string;
+  pattern: [Dash];
+}
+
+table MultilineElement {
+  offset: double;
+  color: Color;
+  linetype: string;
+  lineweight: int = -3;
+}
+
+table MultilineStyle {
+  name: string (required);
+  description: string;
+  elements: [MultilineElement];
+  filled: bool = false;
+  fill: Color;
+  start_cap: ubyte = 1;          // gdoc::EndCap
+  end_cap: ubyte = 1;
+  show_joints: bool = false;
+}
+
+table AttributeDef {
+  tag: string (required);
+  prompt: string;
+  default_value: string;
+  invisible: bool = false;
+  constant: bool = false;
+  verify: bool = false;
+  preset: bool = false;
+  multiline: bool = false;
+  lock_position: bool = false;
+  position: LatticePoint;
+  height: double = 0.0025;
+  rotation: double = 0.0;
+  style: string;
+}
+
+table AttributeValue {
+  tag: string (required);
+  value: string;
+}
+
+table BlockNote {
+  position: LatticePoint;
+  text: string;
+  height: double;
+  angle: double;
+  layer: string;
+  halign: int;
+  valign: int;
+  width: double;
+  style: string;
+  attrs: EntityAttributes;
+}
+
+table BlockDef {
+  name: string (required);
+  description: string;
+  base: LatticePoint;
+  allow_exploding: bool = true;
+  annotative: bool = false;
+  is_xref: bool = false;
+  xref_path: string;
+  geometry: [Shape];
+  attributes: [AttributeDef];
+  nested: [string];
+  geometry_state: SpaceGeometry;
+  nested_refs: [BlockRef];
+  notes: [BlockNote];
+  underlay_state: [ubyte];
+  source_document: [ubyte];
+  source_owner: string;
+}
+
+table BlockRef {
+  name: string (required);
+  insertion: LatticePoint;
+  scale_x: double = 1.0;
+  scale_y: double = 1.0;
+  rotation: double = 0.0;
+  layer: string;
+  attributes: [AttributeValue];
+  notes: [BlockNote];
+  attrs: EntityAttributes;
+}
+
+enum SpaceKind : ubyte { Model = 0, Sketch = 1, Draft = 2, Sheet = 3 }
+
+table Space {
+  id: uint;
+  kind: SpaceKind;
+  name: string;
+  origin: [double];
+  x_axis: [double];
+  y_axis: [double];
+  z_axis: [double];
+  paper_width: double = 0.297;
+  paper_height: double = 0.210;
+}
+
+table SpaceGeometry {
+  space: uint;
+  shapes: [Shape];
+  layers: [string];
+  attrs: [EntityAttributes];
+  // Polyline membership; zero means the shape stands alone.
+  polys: [uint];
+  poly_orders: [uint];
+  keys: [uint];
+  // Bit 0 identifies a region edge; bit 1 reverses its boundary traversal.
+  region_flags: [ubyte];
+  region_loops: [uint];
+}
+
+table EntityAttributes {
+  color_kind: ubyte;             // matches gdoc::Color::Kind
+  color_index: int;
+  color_r: ubyte; color_g: ubyte; color_b: ubyte;
+  linetype: string;
+  lineweight: short;
+  linetype_scale: double = 1.0;
+  transparency: int = -1;
+  visible: bool = true;
+  user_keys: [string];
+  user_values: [string];
+  foreign_format: string;
+  foreign_blob: [ubyte];
+}
+
+table EntityRef {
+  hi: ulong;
+  lo: ulong;
+}
+
+table Entity {
+  id_hi: ulong;
+  id_lo: ulong;
+  kind: ushort;
+  space: uint;
+  layer: string;
+  attrs: EntityAttributes;
+  points: [long];
+  reals: [double];
+  ints: [uint];
+  text: string;
+  refs: [EntityRef];
+  // Optional extension: older files have no binary entity payload.
+  blob: [ubyte];
+}
+
+table Settings {
+  volume: WorkingVolume;
+  units: string;
+  precision: int = 4;
+  created_by: string;
+  application: string;
+  saved_at_unix: long = 0;
+}
+
+table Document {
+  format_version: int = 2;
+  settings: Settings;
+  layers: [Layer];
+  linetypes: [Linetype];
+  multilines: [MultilineStyle];
+  blocks: [BlockDef];
+  block_refs: [BlockRef];
+  spaces: [Space];
+  geometry: [SpaceGeometry];
+  entities: [Entity];
+  current_space: uint = 0;
+  block_state: [ubyte];
+
+}
+
+root_type Document;
+file_identifier "GLCD";
+file_extension "glcad";

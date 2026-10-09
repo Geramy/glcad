@@ -1,0 +1,36 @@
+# Build trees -- every configuration lands under build/.
+build/
+docs/
+# Editor and IDE state.
+.vscode/
+.idea/
+*.swp
+
+# macOS noise.
+.DS_Store
+
+# CMake side products anywhere.
+CMakeCache.txt
+CMakeFiles/
+compile_commands.json
+
+# Python scratch.
+__pycache__/
+*.pyc
+
+# Crash logs and profiler output.
+*.crash
+*.sample.txt
+
+# Xcode user state, wherever a generated project lands.
+xcuserdata/
+*.xcuserstate
+
+# Windows noise.
+Thumbs.db
+
+# Local environment and merge leftovers.
+.env
+*.orig
+.pi/
+*.csv

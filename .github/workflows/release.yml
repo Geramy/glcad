@@ -1,0 +1,191 @@
+name: Release
+
+# A tag builds a reviewable draft after the acceptance workflow succeeds.
+# Publishing the draft remains a separate release decision.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    uses: ./.github/workflows/release-gates.yml
+
+  macos:
+    name: macOS DMG + ZIP
+    needs: acceptance
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      HAS_SIGNING: ${{ secrets.MACOS_CERT_P12 != '' }}
+      HAS_NOTARY: ${{ secrets.MACOS_CERT_P12 != '' && secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_PASSWORD != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: brew install ninja glslang flatbuffers molten-vk vulkan-loader bison flex
+      - name: Import signing certificate
+        if: env.HAS_SIGNING == 'true'
+        env:
+          CERT: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          cert_path="$RUNNER_TEMP/glcad-signing.p12"
+          keychain_path="$RUNNER_TEMP/glcad-signing.keychain-db"
+          keychain_password=$(openssl rand -hex 24)
+          trap 'rm -f "$cert_path"' EXIT
+          printf '%s' "$CERT" | base64 -d > "$cert_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security list-keychains -d user -s "$keychain_path" login.keychain-db
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$cert_path" -k "$keychain_path" -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain_path"
+          identity=$(security find-identity -v -p codesigning "$keychain_path" |
+                     awk -F'"' '/Developer ID Application/ {print $2; exit}')
+          test -n "$identity"
+          printf 'GLCAD_SIGN_IDENTITY=%s\n' "$identity" >> "$GITHUB_ENV"
+      - name: Build installers
+        run: scripts/package-all.sh macos
+      - name: Notarize DMG
+        if: env.HAS_NOTARY == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          for image in build/installers/glcad-*-Darwin.dmg; do
+            xcrun notarytool submit "$image" --wait \
+              --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+              --password "$APPLE_APP_PASSWORD"
+            xcrun stapler staple "$image"
+            xcrun stapler validate "$image"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          if-no-files-found: error
+          path: |
+            build/installers/glcad-*-Darwin.dmg
+            build/installers/glcad-*-Darwin.zip
+      - name: Remove signing keychain
+        if: always() && env.HAS_SIGNING == 'true'
+        run: security delete-keychain "$RUNNER_TEMP/glcad-signing.keychain-db"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-package-logs
+          path: build/installers/logs
+
+  linux:
+    name: Linux ${{ matrix.arch }} packages
+    needs: acceptance
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            artifact_arch: x86_64
+            runner: ubuntu-24.04
+          - arch: arm64
+            artifact_arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build installers in the package environment
+        run: scripts/package-all.sh linux-${{ matrix.arch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          if-no-files-found: error
+          path: |
+            build/installers/glcad-*-linux-${{ matrix.artifact_arch }}.deb
+            build/installers/glcad-*-linux-${{ matrix.artifact_arch }}.rpm
+            build/installers/glcad-*-linux-${{ matrix.artifact_arch }}.tar.gz
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-${{ matrix.arch }}-package-logs
+          path: build/installers/logs
+
+  windows:
+    name: Windows x86-64 setup + ZIP
+    needs: acceptance
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: brew install ninja glslang flatbuffers mingw-w64 makensis autoconf autoconf-archive automake libtool pkg-config bison flex
+      - uses: actions/checkout@v4
+        with:
+          repository: microsoft/vcpkg
+          ref: 0c8f465c549616e897a34b9393054931fda6339c
+          path: build/tools/vcpkg
+      - name: Bootstrap pinned dependency manager
+        run: build/tools/vcpkg/bootstrap-vcpkg.sh -disableMetrics
+      - name: Build installers
+        run: scripts/package-all.sh windows
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          if-no-files-found: error
+          path: |
+            build/installers/glcad-*-win64.exe
+            build/installers/glcad-*-win64.zip
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-package-logs
+          path: build/installers/logs
+
+  windows-install:
+    name: Native Windows setup acceptance
+    needs: windows
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows
+          path: build/installers
+      - name: Install, verify payload and uninstall
+        shell: pwsh
+        run: ./scripts/test-windows-installer.ps1 -PackageDirectory build/installers
+
+  draft:
+    name: Create reviewable release draft
+    needs: [macos, linux, windows-install]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-amd64
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-arm64
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows
+          path: dist
+      - name: Checksums
+        run: cd dist && sha256sum glcad-* > SHA256SUMS
+      - name: Create draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --draft \
+            --title "GLCAD $GITHUB_REF_NAME" --generate-notes

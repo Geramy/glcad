@@ -1,0 +1,5 @@
+cadquery-ocp==8.0.1.0.0
+trimesh==5.1.0
+scipy==1.18.1
+ezdxf==1.4.4
+pypdf==6.18.1

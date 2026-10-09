@@ -1,0 +1,91 @@
+--- a/native/build-libpglite.sh
++++ b/native/build-libpglite.sh
+@@ -4,7 +4,20 @@
+ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ SRC="$ROOT/postgres-pglite"
+ OUT="$ROOT/native/out"
++
++# Cross builds: PGL_HOST_TRIPLE names the toolchain prefix and configure
++# --host; PGL_TARGET_OS (Darwin, Linux, Windows, or a MINGW/MSYS uname)
++# steers the per-target branches below and defaults to the build host;
++# PGL_CONFIGURE_EXTRA appends configure options, and a later --without-x
++# there overrides a --with-x ahead of it.
++PGL_HOST_TRIPLE="${PGL_HOST_TRIPLE:-}"
++PGL_TARGET_OS="${PGL_TARGET_OS:-$(uname)}"
++if [ -n "$PGL_HOST_TRIPLE" ]; then
++  CC="${CC:-$PGL_HOST_TRIPLE-gcc}"
++  AR="${AR:-$PGL_HOST_TRIPLE-ar}"
++fi
+ CC="${CC:-clang}"
++AR="${AR:-ar}"
+ 
+ ICU_CONFIGURE="--without-icu"
+ ICU_ARCHIVES=""
+@@ -37,7 +50,7 @@
+ done
+ 
+ PGLITEC_COMPAT="-include stdlib.h -include stdbool.h"
+-if [ "$(uname)" = "Darwin" ]; then
++if [ "$PGL_TARGET_OS" = "Darwin" ]; then
+   PGLITEC_COMPAT="$PGLITEC_COMPAT -D__key=_key"
+ fi
+ 
+@@ -52,6 +65,8 @@
+     "$ICU_CONFIGURE" \
+     --without-readline \
+     --with-zlib \
++    ${PGL_HOST_TRIPLE:+--host=$PGL_HOST_TRIPLE} \
++    ${PGL_CONFIGURE_EXTRA:-} \
+     CFLAGS="-O2 -fPIC")
+ fi
+ 
+@@ -74,12 +89,12 @@
+ LINK_OBJS="$OUT/pglitec.o $OUT/pglite_native.o"
+ 
+ SL_FLAGS=""
+-if [ "$(uname)" = "Darwin" ]; then
++if [ "$PGL_TARGET_OS" = "Darwin" ]; then
+   SL_FLAGS="-Wl,-undefined,dynamic_lookup"
+ fi
+-case "$(uname)" in MINGW*|MSYS*) SL_FLAGS="$LINK_OBJS -lws2_32" ;; esac
++case "$PGL_TARGET_OS" in MINGW*|MSYS*|Windows) SL_FLAGS="$LINK_OBJS -lws2_32" ;; esac
+ 
+-rm -f "$BUILD/src/backend/main/main.o" "$BUILD/src/backend/main/objfiles.txt" "$BUILD/src/bin/initdb/initdb.o" "$BUILD/src/backend/postgres"
++rm -f "$BUILD/src/backend/main/main.o" "$BUILD/src/backend/main/objfiles.txt" "$BUILD/src/bin/initdb/initdb.o" "$BUILD/src/backend/postgres" "$BUILD/src/backend/postgres.exe"
+ make -C "$BUILD" -j"$NPROC" COPT="$PGLITE_DEFS" LDFLAGS_EX="$LINK_OBJS" LDFLAGS_SL="$SL_FLAGS"
+ make -C "$BUILD" install COPT="$PGLITE_DEFS" LDFLAGS_EX="$LINK_OBJS" LDFLAGS_SL="$SL_FLAGS"
+ 
+@@ -88,7 +103,7 @@
+ 
+ BACKEND_OBJS="$(cd "$BUILD" && cat $(find src/backend src/timezone -name objfiles.txt) | tr ' ' '\n' | sed '/^$/d' | sort -u)"
+ 
+-if [ "$(uname)" = "Darwin" ]; then
++if [ "$PGL_TARGET_OS" = "Darwin" ]; then
+   (cd "$BUILD" && libtool -static -o "$OUT/libpglite.a" $BACKEND_OBJS \
+     src/common/libpgcommon_srv.a src/port/libpgport_srv.a \
+     "$OUT/pglitec.o" "$OUT/pglite_native.o" "$OUT/pglite_reset.o" \
+@@ -99,20 +114,20 @@
+     for o in $BACKEND_OBJS; do echo "addmod $o"; done
+     echo "addlib src/common/libpgcommon_srv.a"
+     echo "addlib src/port/libpgport_srv.a"
+-    case "$(uname)" in MINGW*|MSYS*) echo "delete getopt_srv.o getopt_long_srv.o" ;; esac
++    case "$PGL_TARGET_OS" in MINGW*|MSYS*|Windows) echo "delete getopt_srv.o getopt_long_srv.o" ;; esac
+     echo "addmod ../pglitec.o"; echo "addmod ../pglite_native.o"; echo "addmod ../pglite_reset.o"
+     echo "addmod ../pglite_static_ext.o"
+-    case "$(uname)" in MINGW*|MSYS*)
++    case "$PGL_TARGET_OS" in MINGW*|MSYS*|Windows)
+       for o in src/pl/plpgsql/src/*.o; do echo "addmod $o"; done ;;
+     esac
+     for a in $ICU_ARCHIVES; do echo "addlib $a"; done
+     echo "save"
+     echo "end"
+-  } | ar -M && mv -f libpglite.a "$OUT/libpglite.a")
++  } | "$AR" -M && mv -f libpglite.a "$OUT/libpglite.a")
+ fi
+ 
+ EXE=""
+-case "$(uname)" in MINGW*|MSYS*) EXE=".exe" ;; esac
++case "$PGL_TARGET_OS" in MINGW*|MSYS*|Windows) EXE=".exe" ;; esac
+ tar -C "$PREFIX" --exclude lib/postgresql/pgxs -cf "$OUT/pglite-runtime.tar" share/postgresql lib/postgresql "bin/initdb$EXE" "bin/postgres$EXE"
+ 
+ ls -lh "$OUT/libpglite.a" "$OUT/pglite-runtime.tar"

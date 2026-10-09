@@ -1,0 +1,92 @@
+GLCAD Noncommercial Source License, version 1.0
+
+Copyright (c) 2026 Geramy Loveless
+
+This is a custom source-available license. It is not the MIT License and is
+not an open-source license. Commercial rights are reserved as stated below.
+
+1. Scope
+
+"Software" means the GLCAD source code, executable code and accompanying
+documentation in which Geramy Loveless owns copyright and which is supplied
+under this license. "Licensor" means Geramy Loveless. Third-party components
+remain governed by their own licenses; this license does not replace them or
+claim ownership of their code. Rights held by other contributors are not
+granted unless those contributors have authorized the applicable grant.
+
+2. Free noncommercial permission
+
+Licensor permits you, without a license fee, to use, inspect, copy, modify,
+build and share the Software solely for noncommercial purposes, subject to
+these terms. Personal learning, personal hobby projects and education that
+does not provide a commercial service qualify as noncommercial purposes.
+
+Keep this license, the copyright notices and third-party notices with every
+copy or substantial portion you share. Mark modified versions as modified.
+Share covered code and modifications only under these same terms, without
+charging for access or granting rights beyond this license. Recipients must
+receive this license and the same noncommercial limitations. Do not imply
+that Licensor endorses your version. No trademark rights are granted.
+
+3. Commercial use requires a separate license
+
+This free license does not permit commercial use. Commercial use includes
+using the Software in the operation of a business; using it as part of paid
+employment, contracting, consulting or another compensated service; and
+using it to design or produce goods, plans or other deliverables intended
+for sale or another commercial benefit. Internal business use is commercial
+use even when the Software itself is not sold.
+
+Commercial use of the official CAD application requires a valid paid license
+from Licensor, obtained through the official App Store offering or a separate
+written agreement with Licensor. The permitted users, duration and scope of
+that commercial license are set by the applicable paid-use terms or written
+agreement. A noncommercial source build is not a paid commercial license.
+
+4. Commercialization of the Software is reserved
+
+Except under a separate written agreement expressly authorizing it, you may
+not sell, rent, sublicense commercially, monetize, or provide the Software or
+a derivative of it as a commercial product or service. This includes paid
+redistribution, a competing commercial application, paid hosted access, and
+embedding covered code in another commercial product. Making your derivative
+available without charge does not make an otherwise commercial service
+noncommercial.
+
+A paid license to use the official CAD application does not grant permission
+to commercialize its source, redistribute paid copies, resell access, or
+operate a hosted CAD service. Only Licensor may grant those additional rights
+in the portions of the Software that Licensor owns. Licensor retains the
+right to commercialize and separately license those portions.
+
+5. Your drawings and retrieval of existing work
+
+This license does not give Licensor ownership of your drawings, models,
+documents or other output. It does not impose this source license on output
+merely because the Software was used to create it.
+
+If a paid-use license ends, you may continue to view, save copies of, and
+export existing documents for retrieval without renewing it. This permission
+does not authorize new commercial creation or editing. The end of a paid-use
+license does not restrict subsequent use of output lawfully created while
+that license was valid.
+
+6. Compliance and reserved rights
+
+Permission under this license ends if you violate its terms. After termination
+you must stop the unlicensed use and distribution; retaining your own output
+and retrieving existing documents as described above remain permitted. Rights
+not expressly granted are reserved. Any separate written agreement signed by
+Licensor controls to the extent it expressly changes these terms. Mandatory
+rights under applicable law are not excluded by this license.
+
+7. No warranty; limitation of liability
+
+The Software may contain errors and is supplied without promises about its
+quality, fitness, accuracy, safety, availability or freedom from infringement.
+Use it at your own risk and independently verify results needed for a project.
+To the extent applicable law allows, Licensor is not responsible for damages
+or losses arising from use of, inability to use, or reliance on the Software,
+including lost data, profit, business or other consequential loss. This
+section does not override a non-excludable legal obligation or an express
+warranty in a separate paid agreement.

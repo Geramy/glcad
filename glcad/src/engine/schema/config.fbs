@@ -1,0 +1,52 @@
+namespace glcad.cfg;
+
+table AiServer {
+  name:string;
+  url:string;
+  manual:bool;
+  // Appended fields (schema evolution is append-only):
+  api_key:string;
+  default_model:string;
+  default_tts:string;
+  default_stt:string;
+  tts_voice:string;
+  default_img:string;
+  default_embed:string;
+}
+
+table Config {
+  default_unit:string;
+
+  ai_servers:[AiServer];
+  ai_active_url:string;
+  ai_model:string;
+  ai_show_thinking:bool;
+
+  audio_output:string;
+  audio_input:string;
+
+  ai_voice:bool;
+
+  // Tri-state scalars: the sentinel default means "never set".
+  theme:string;
+  dim_precision:int = -1;     // dimension decimals index; -1 = app default
+  polar:byte = -1;            // polar tracking: -1 unset, 0 off, 1 on
+  ortho:byte = -1;
+  smoothing:byte = -1;
+  smoothing_angle:double = 0; // degrees; 0 = unset
+  curve_quality:byte = -1;    // 0 draft, 1 standard, 2 fine
+  msaa:int = 0;               // samples; 0 = unset
+
+  ai_reasoning_effort:string;
+
+  recent_locations:[string];
+
+  mcp_enabled:bool = false;
+  mcp_port:int = 5912;
+  mcp_token:string;
+  mcp_require_token:bool = true;
+
+  command_history:byte = -1;  // -1 unset, 0 hidden, 1 shown
+}
+
+root_type Config;

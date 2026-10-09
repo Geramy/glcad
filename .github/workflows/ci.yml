@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  macos:
+    name: macOS build + full tests
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: brew install ninja glslang flatbuffers molten-vk vulkan-loader
+      - name: Configure (debug, the tree the test presets expect)
+        run: cmake --preset debug
+      - name: Build
+        run: cmake --build build/debug -j4
+      - name: Tests
+        run: ctest --preset full --output-on-failure
+
+  linux:
+    name: Linux build + full tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build glslang-tools libx11-dev \
+              flatbuffers-compiler libflatbuffers-dev libssl-dev
+      - name: Configure
+        run: cmake --preset debug
+      - name: Build
+        run: cmake --build build/debug -j4
+      - name: Tests
+        run: ctest --preset full --output-on-failure
+
+  windows-cross:
+    name: Windows cross build (MinGW)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build glslang-tools \
+              flatbuffers-compiler libflatbuffers-dev \
+              g++-mingw-w64-x86-64-posix gcc-mingw-w64-x86-64-posix
+      - name: Configure
+        # The -posix compilers carry winpthreads, which std::thread needs;
+        # Ubuntu's default alternative is the win32-threads one.
+        run: |
+          cmake -S . -B build/windows -G Ninja \
+                -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-mingw64.cmake \
+                -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc-posix \
+                -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++-posix \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DGLCAD_FETCH_SLANG=OFF \
+                -DGLCAD_GLSLANG=/usr/bin/glslangValidator \
+                -DFLATC_EXECUTABLE=/usr/bin/flatc \
+                -DFLATBUFFERS_INCLUDE_DIR=/usr/include
+      - name: Build
+        run: cmake --build build/windows -j4

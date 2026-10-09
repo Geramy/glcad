@@ -1,0 +1,42 @@
+diff --git a/src/backend/tcop/postgres.c b/src/backend/tcop/postgres.c
+index 1b41bf4..5702cea 100644
+--- a/src/backend/tcop/postgres.c
++++ b/src/backend/tcop/postgres.c
+@@ -220,6 +220,28 @@ extern sigjmp_buf postgresmain_sigjmp_buf;
+ extern int pgl_sigsetjmp(sigjmp_buf env, int savesigs);
+ extern int is_pglite_active;
+ 
++/*
++ * The fake client socket must be a kqueue-registrable descriptor: pq_init
++ * adds it to the FeBeWaitSet, and on macOS kevent() refuses device files.
++ * Descriptor 1 (the wasm build's choice) is whatever the host process's
++ * stdout happens to be -- a pipe or file works, /dev/null does not. Hand
++ * the wait set a pipe of our own instead; the data itself always flows
++ * through the pglite read/write callbacks, never this descriptor.
++ */
++int pgl_native_sock_fd(void) {
++	static int fd = -1;
++	if (fd == -1)
++	{
++		int			pair[2];
++
++		if (pipe(pair) == 0)
++			fd = pair[0];
++		else
++			fd = 1;
++	}
++	return fd;
++}
++
+ void initDummyPort() {
+ 	ClientSocket s;
+ 	struct sockaddr_in *addr;
+@@ -228,7 +250,7 @@ void initDummyPort() {
+ 	/* Switch to TopMemoryContext so the Port survives MessageContext resets */
+ 	oldcontext = MemoryContextSwitchTo(TopMemoryContext);
+ 
+-	s.sock = 1;
++	s.sock = pgl_native_sock_fd();
+ 
+ 	/* Set up a valid-looking localhost address */
+ 	memset(&s.raddr, 0, sizeof(s.raddr));

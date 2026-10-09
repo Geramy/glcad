@@ -1,0 +1,30 @@
+add_library(gai
+  client.cpp
+  discovery.cpp)
+target_include_directories(gai PUBLIC ${CMAKE_SOURCE_DIR}/glcad/include)
+target_link_libraries(gai PUBLIC gcm)
+if(TARGET nlohmann_json::nlohmann_json)
+  target_link_libraries(gai PUBLIC nlohmann_json::nlohmann_json)
+endif()
+target_compile_features(gai PUBLIC cxx_std_20)
+if(TARGET glcad_httplib)
+  target_link_libraries(gai PRIVATE glcad_httplib)
+endif()
+find_package(OpenSSL QUIET)
+if(OpenSSL_FOUND)
+  target_compile_definitions(gai PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+  target_link_libraries(gai PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+  message(STATUS "gai: HTTPS enabled (${OPENSSL_VERSION})")
+else()
+  message(STATUS "gai: no OpenSSL -- https AI servers will be refused with a message")
+endif()
+if(WIN32)
+  target_link_libraries(gai PRIVATE ws2_32)
+endif()
+
+add_executable(gai_tests
+  ${CMAKE_SOURCE_DIR}/glcad/src/math/tests/main.cpp
+  tests/test_ai.cpp)
+target_link_libraries(gai_tests PRIVATE gai)
+target_include_directories(gai_tests PRIVATE ${CMAKE_SOURCE_DIR}/glcad/src/math/tests)
+glcad_add_tiered_test(gai_tests)

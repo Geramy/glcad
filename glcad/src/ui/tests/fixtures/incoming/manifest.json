@@ -1,0 +1,17 @@
+{
+  "source_tools": {
+    "DXF": "ezdxf 1.4.4",
+    "STEP": "Open Cascade via cadquery-ocp 8.0.1.0.0"
+  },
+  "dimensions_m": [
+    8,
+    5,
+    3
+  ],
+  "through_hole_radius_m": 1,
+  "expected_volume_m3": 110.57522203923061,
+  "sha256": {
+    "plate.dxf": "95cd79b12b0b9cc57e1335b663861e4c145c90d2e20706ef7e2485398f3ea955",
+    "plate.step": "4f758eab2283c100553a91ea356b318fcc87073e87d8ee7148dbea9fbc1ceaf6"
+  }
+}

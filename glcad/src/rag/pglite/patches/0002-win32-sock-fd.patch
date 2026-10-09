@@ -1,0 +1,25 @@
+--- a/src/backend/tcop/postgres.c
++++ b/src/backend/tcop/postgres.c
+@@ -229,6 +229,14 @@
+  * through the pglite read/write callbacks, never this descriptor.
+  */
+ int pgl_native_sock_fd(void) {
++#ifdef WIN32
++	/*
++	 * No kqueue and no pipe() on this port: keep the wasm build's
++	 * descriptor 1. The win32 latch already tolerates a non-socket there,
++	 * leaving it out of its event set.
++	 */
++	return 1;
++#else
+ 	static int fd = -1;
+ 	if (fd == -1)
+ 	{
+@@ -240,6 +248,7 @@
+ 			fd = 1;
+ 	}
+ 	return fd;
++#endif
+ }
+ 
+ void initDummyPort() {

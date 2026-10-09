@@ -1,0 +1,141 @@
+{
+  "identifier": "B1F7F4C1-95A8-4B9B-8775-92853FC57359",
+  "nonRenewingSubscriptions": [],
+  "products": [],
+  "settings": {
+    "_askToBuyEnabled": false,
+    "_billingGracePeriodEnabled": false,
+    "_billingIssuesEnabled": false,
+    "_compatibilityTimeRate": {
+      "3": 6
+    },
+    "_disableDialogs": false,
+    "_failTransactionsEnabled": false,
+    "_locale": "en_US",
+    "_renewalBillingIssuesEnabled": false,
+    "_storefront": "USA",
+    "_storeKitErrors": [
+      {
+        "current": {
+          "index": 2,
+          "type": "generic"
+        },
+        "enabled": false,
+        "name": "Load Products"
+      },
+      {
+        "current": {
+          "index": 1,
+          "type": "purchase"
+        },
+        "enabled": false,
+        "name": "Purchase"
+      },
+      {
+        "current": {
+          "index": 0,
+          "type": "verification"
+        },
+        "enabled": false,
+        "name": "Verification"
+      },
+      {
+        "current": {
+          "index": 2,
+          "type": "generic"
+        },
+        "enabled": false,
+        "name": "App Store Sync"
+      },
+      {
+        "current": {
+          "index": 2,
+          "type": "generic"
+        },
+        "enabled": false,
+        "name": "Subscription Status"
+      },
+      {
+        "current": {
+          "index": 3,
+          "type": "generic"
+        },
+        "enabled": false,
+        "name": "App Transaction"
+      },
+      {
+        "current": {
+          "index": 3,
+          "type": "generic"
+        },
+        "enabled": false,
+        "name": "Manage Subscriptions Sheet"
+      },
+      {
+        "current": {
+          "index": 0,
+          "type": "refund request"
+        },
+        "enabled": false,
+        "name": "Refund Request Sheet"
+      },
+      {
+        "current": {
+          "index": 4,
+          "type": "generic"
+        },
+        "enabled": false,
+        "name": "Offer Code Redeem Sheet"
+      }
+    ],
+    "_timeRate": 1003
+  },
+  "subscriptionGroups": [
+    {
+      "id": "C13B9D49-24DA-42AB-A8E6-0A212081C550",
+      "localizations": [],
+      "name": "GLCAD local tests only",
+      "subscriptions": [
+        {
+          "adHocOffers": [],
+          "codeOffers": [],
+          "displayPrice": "5.00",
+          "familyShareable": false,
+          "groupNumber": 1,
+          "internalID": "5DAD1A99-3154-42A4-AD97-09192AC69330",
+          "localizations": [
+            {
+              "description": "Local subscription lifecycle test. No production purchase.",
+              "displayName": "GLCAD Monthly \u2014 Local Test",
+              "locale": "en_US"
+            }
+          ],
+          "productID": "test.glcad.monthly",
+          "recurringSubscriptionPeriod": "P1M",
+          "referenceName": "Monthly local test",
+          "subscriptionGroupID": "C13B9D49-24DA-42AB-A8E6-0A212081C550",
+          "type": "RecurringSubscription",
+          "introductoryOffers": [],
+          "winbackOffers": [],
+          "billingPlans": [
+            {
+              "billingPlanType": "BILLED_UPFRONT",
+              "commitmentDisplayPrice": "5.00",
+              "displayPrice": "5.00",
+              "internalID": "88997A9C",
+              "isEnabled": true
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "version": {
+    "major": 6,
+    "minor": 3
+  },
+  "appPolicies": {
+    "eula": "",
+    "policies": []
+  }
+}
