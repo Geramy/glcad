@@ -16,8 +16,18 @@ struct Pen {
     Vec2 at(f32 x, f32 y) const {
         return {box.x + x * box.w, box.y + y * box.h};
     }
+    void tri(f32 x0, f32 y0, f32 x1, f32 y1, f32 x2, f32 y2) const {
+        c.draw().triangle(at(x0, y0), at(x1, y1), at(x2, y2), col);
+    }
+    void cap(Vec2 q) const {
+        if (w < 2.0f) return;
+        const f32 h = w * 0.5f;
+        c.draw().round_rect({q.x - h, q.y - h, w, w}, h, col);
+    }
     void line(f32 x0, f32 y0, f32 x1, f32 y1) const {
         c.draw().line(at(x0, y0), at(x1, y1), w, col);
+        cap(at(x0, y0));
+        cap(at(x1, y1));
     }
     void rect(f32 x0, f32 y0, f32 x1, f32 y1, f32 radius = 0.0f) const {
         const Vec2 a = at(x0, y0), b = at(x1, y1);
@@ -44,8 +54,10 @@ struct Pen {
             const f32 t = a0 + span * (static_cast<f32>(i) / steps);
             const Vec2 p = at(cx + r * std::cos(t), cy + r * std::sin(t));
             c.draw().line(prev, p, w, col);
+            cap(prev);
             prev = p;
         }
+        cap(prev);
     }
     void ellipse(f32 cx, f32 cy, f32 rx, f32 ry) const {
         constexpr int steps = 28;
@@ -54,8 +66,22 @@ struct Pen {
             const f32 a = 6.28318530718f * static_cast<f32>(i) / steps;
             const Vec2 next = at(cx + rx * std::cos(a), cy + ry * std::sin(a));
             c.draw().line(previous, next, w, col);
+            cap(previous);
             previous = next;
         }
+    }
+    void half_ellipse(f32 cx, f32 cy, f32 rx, f32 ry, bool front) const {
+        constexpr int steps = 24;
+        const f32 a0 = front ? 0.0f : 3.14159265f;
+        Vec2 previous = at(cx + rx * std::cos(a0), cy + ry * std::sin(a0));
+        for (int i = 1; i <= steps; ++i) {
+            const f32 a = a0 + 3.14159265f * static_cast<f32>(i) / steps;
+            const Vec2 next = at(cx + rx * std::cos(a), cy + ry * std::sin(a));
+            c.draw().line(previous, next, w, col);
+            cap(previous);
+            previous = next;
+        }
+        cap(previous);
     }
 
     void circle(f32 cx, f32 cy, f32 r) const {
@@ -83,9 +109,10 @@ void draw_icon(Context& c, Icon icon, const Rect& r, Color col, f32 weight) {
         }
     }
 
-    const f32 side = std::min(r.w, r.h) * 0.5f;
+    const f32 em = std::min(r.w, r.h) * 0.6f;
+    const f32 side = em * (20.0f / 24.0f);
     Rect box{r.x + (r.w - side) * 0.5f, r.y + (r.h - side) * 0.5f, side, side};
-    const Pen p{c, box, col, weight};
+    const Pen p{c, box, col, std::max(weight, em * (2.0f / 24.0f))};
 
     switch (icon) {
         case Icon::Line:      p.line(0.12f, 0.82f, 0.88f, 0.18f);
@@ -304,10 +331,86 @@ void draw_icon(Context& c, Icon icon, const Rect& r, Color col, f32 weight) {
                               p.line(0.54f, 0.68f, 0.54f, 0.80f);
                               p.circle(0.66f, 0.39f, 0.24f);
                               p.line(0.83f, 0.56f, 1.0f, 0.75f); break;
+        case Icon::Cursor:    p.line(0.26f, 0.10f, 0.26f, 0.82f);
+                              p.line(0.26f, 0.82f, 0.44f, 0.64f);
+                              p.line(0.44f, 0.64f, 0.58f, 0.92f);
+                              p.line(0.58f, 0.92f, 0.68f, 0.87f);
+                              p.line(0.68f, 0.87f, 0.55f, 0.60f);
+                              p.line(0.55f, 0.60f, 0.80f, 0.60f);
+                              p.line(0.80f, 0.60f, 0.26f, 0.10f); break;
+        case Icon::Polygon:   for (int i = 0; i < 6; ++i) {
+                                  const f32 a0 = i * 1.0472f - 1.5708f, a1 = a0 + 1.0472f;
+                                  p.line(0.5f + 0.40f * std::cos(a0), 0.5f + 0.40f * std::sin(a0),
+                                         0.5f + 0.40f * std::cos(a1), 0.5f + 0.40f * std::sin(a1));
+                              }
+                              break;
+        case Icon::Stretch:   p.rect(0.10f, 0.30f, 0.50f, 0.70f);
+                              p.line(0.50f, 0.30f, 0.86f, 0.30f);
+                              p.line(0.50f, 0.70f, 0.86f, 0.70f);
+                              p.line(0.86f, 0.30f, 0.86f, 0.70f);
+                              p.chevron(0.80f, 0.50f, 0.08f, 1);
+                              p.line(0.58f, 0.50f, 0.84f, 0.50f); break;
+        case Icon::BreakLine: p.line(0.08f, 0.70f, 0.40f, 0.42f);
+                              p.line(0.60f, 0.58f, 0.92f, 0.30f);
+                              p.dot(0.40f, 0.42f, 0.06f);
+                              p.dot(0.60f, 0.58f, 0.06f); break;
+        case Icon::PolarArray:p.circle(0.5f, 0.5f, 0.30f);
+                              for (int i = 0; i < 6; ++i) {
+                                  const f32 a = i * 1.0472f;
+                                  p.dot(0.5f + 0.30f * std::cos(a), 0.5f + 0.30f * std::sin(a), 0.07f);
+                              }
+                              break;
+        case Icon::Group:     p.rect(0.08f, 0.08f, 0.92f, 0.92f, 0.08f);
+                              p.rect(0.20f, 0.22f, 0.50f, 0.52f);
+                              p.circle(0.64f, 0.66f, 0.16f); break;
+        case Icon::Radius:    p.circle(0.5f, 0.5f, 0.42f);
+                              p.line(0.5f, 0.5f, 0.70f, 0.30f);
+                              p.tri(0.797f, 0.203f, 0.62f, 0.27f, 0.73f, 0.38f);
+                              p.dot(0.5f, 0.5f, 0.08f); break;
+        case Icon::Diameter:  p.circle(0.5f, 0.5f, 0.38f);
+                              p.line(0.23f, 0.77f, 0.77f, 0.23f);
+                              p.chevron(0.73f, 0.27f, 0.06f, 2);
+                              p.chevron(0.27f, 0.73f, 0.06f, 3); break;
+        case Icon::Angle:     p.line(0.08f, 0.86f, 0.94f, 0.86f);
+                              p.line(0.08f, 0.86f, 0.60f, 0.14f);
+                              p.arc(0.08f, 0.86f, 0.50f, -0.946f, 0.0f); break;
+        case Icon::Cylinder:  p.ellipse(0.5f, 0.2f, 0.40f, 0.14f);
+                              p.line(0.10f, 0.2f, 0.10f, 0.8f);
+                              p.line(0.90f, 0.2f, 0.90f, 0.8f);
+                              p.half_ellipse(0.5f, 0.8f, 0.40f, 0.14f, true); break;
+        case Icon::Sphere:    p.circle(0.5f, 0.5f, 0.44f);
+                              p.half_ellipse(0.5f, 0.5f, 0.44f, 0.15f, true); break;
+        case Icon::Hole:      p.rect(0.08f, 0.20f, 0.92f, 0.80f);
+                              p.circle(0.5f, 0.5f, 0.17f);
+                              p.line(0.5f, 0.08f, 0.5f, 0.24f);
+                              p.line(0.5f, 0.76f, 0.5f, 0.92f); break;
+        case Icon::PushPull:  p.rect(0.14f, 0.56f, 0.86f, 0.88f);
+                              p.line(0.5f, 0.10f, 0.5f, 0.50f);
+                              p.chevron(0.5f, 0.20f, 0.12f, 2); break;
+        case Icon::Draft:     p.line(0.26f, 0.12f, 0.74f, 0.12f);
+                              p.line(0.74f, 0.12f, 0.92f, 0.88f);
+                              p.line(0.92f, 0.88f, 0.08f, 0.88f);
+                              p.line(0.08f, 0.88f, 0.26f, 0.12f);
+                              p.dot(0.5f, 0.30f, 0.05f);
+                              p.dot(0.5f, 0.50f, 0.05f);
+                              p.dot(0.5f, 0.70f, 0.05f); break;
+        case Icon::Shapes:    p.rect(0.08f, 0.44f, 0.50f, 0.88f);
+                              p.circle(0.68f, 0.34f, 0.24f);
+                              p.line(0.30f, 0.08f, 0.08f, 0.38f);
+                              p.line(0.30f, 0.08f, 0.52f, 0.38f); break;
+        case Icon::Slice:     p.rect(0.14f, 0.26f, 0.86f, 0.90f, 2.0f);
+                              p.line(0.0f, 0.70f, 1.0f, 0.30f); break;
+        case Icon::EllipseShape: p.ellipse(0.5f, 0.5f, 0.46f, 0.28f); break;
         case Icon::Search:    p.circle(0.42f, 0.42f, 0.28f);
                               p.line(0.63f, 0.63f, 0.88f, 0.88f); break;
         default: break;
     }
+}
+
+void draw_menu_marker(Context& c, const Rect& button, Color color, f32 unit) {
+    const f32 inset = 5.0f * unit, size = 7.0f * unit;
+    const Vec2 corner{button.right() - inset, button.bottom() - inset};
+    c.draw().triangle(corner, {corner.x - size, corner.y}, {corner.x, corner.y - size}, color);
 }
 
 const char* icon_name(Icon i) noexcept {

@@ -22,6 +22,7 @@
 #include "geometry/annotation.hpp"
 #include "geometry/boolean.hpp"
 #include "ui/frame_types.hpp"
+#include "ui/touch.hpp"
 #include "engine/document_file.hpp"
 #include "engine/commandline.hpp"
 #include "ui/commands.hpp"
@@ -120,6 +121,7 @@ public:
     void set_safe_insets(double left, double top, double right, double bottom);
     gui::Insets safe_insets() const noexcept { return safe_insets_; }
     float toolbar_top() const noexcept { return toolbar_top_; }
+    const std::vector<std::pair<std::string, gui::Rect>>& menu_markers() const noexcept { return menu_markers_; }
     double viewport_width() const noexcept { return vw_; }
     gui::Rect canvas_bounds() const noexcept { return canvas_rect_; }
     gui::Rect canvas_fit_bounds() const noexcept;
@@ -140,8 +142,14 @@ public:
     void pointer_move(double x, double y);
     void pointer_down(double x, double y);
     void pointer_up(double x, double y);
+    void pencil_tap(double x, double y);
+    void settle_pointer(double x, double y);
     void pencil_release(double x, double y);
     void finger_tap(double x, double y);
+    void apply_gesture(const TouchResult& r);
+    enum class PointerPhase { Down, Move, Up };
+    void pointer_input(PointerPhase phase, double x, double y, bool secondary);
+    bool tap_region_at(double x, double y);
     void right_down(double x, double y);
 
     void middle_down(double x, double y);
@@ -644,6 +652,10 @@ private:
     std::vector<LineVertex>          static_lines_, static_points_;
     gcm::u64                         lifted_key_{0};
     bool   hover_done_{false}, hover_pending_{false};
+    bool   pointer_deferred_{false}, pointer_secondary_{false};
+    gui::Vec2 frame_mouse_{-1e9f, -1e9f};
+    double pointer_down_x_{0}, pointer_down_y_{0};
+    bool   region_tap_target(double x, double y, Modeller::Target& t);
     bool   region_probe_pending_{false};
     double probe_x_{0.0}, probe_y_{0.0};
     double hover_x_{0}, hover_y_{0};
@@ -669,6 +681,8 @@ private:
     std::size_t text_style_font_count_{0};
     gui::ScrollState text_color_scroll_{};
     void    draw_tablet_toolbar(gui::Rect& screen);
+    void    draw_shapes_menu(float row_h);
+    void    draw_placement_chip(const gui::Rect& canvas);
     void    draw_mode_switch(const gui::Rect& button, const gui::Rect& bar, bool compact);
     void    draw_canvas_options(const gui::Rect& button, const gui::Rect& row);
     void    draw_discipline_picker(const gui::Rect& r);
@@ -730,9 +744,10 @@ private:
     bool        native_menus_{false};
     int         open_menu_{-1};
     bool        tablet_mode_{false};
-    ToolGroup   tablet_group_{ToolGroup::Draw};
-    ToolId      tablet_last_active_{ToolId::Count};
     int         tablet_popup_{0}, tablet_popup_page_{0};
+    bool        shapes_open_{false};
+    gui::Rect   shapes_anchor_{}, shapes_menu_rect_{}, placement_chip_rect_{};
+    std::vector<std::pair<std::string, gui::Rect>> menu_markers_;
     bool        menu_overflow_open_{false};
     int         menu_overflow_page_{0}, menu_item_page_{0};
     void        draw_menu_bar(const gui::Rect& bar, const gui::Rect& row);
@@ -820,7 +835,7 @@ public:
     void set_native_menus(bool on) noexcept { native_menus_ = on; }
     bool native_menus() const noexcept { return native_menus_; }
     void set_tablet_mode(bool on) {
-        tablet_mode_=on; tablet_popup_=0; tablet_last_active_=active_tool_id_;
+        tablet_mode_=on; tablet_popup_=0;
         invalidate_frame_caches();
     }
     int  open_menu() const noexcept { return open_menu_; }
@@ -1127,7 +1142,12 @@ private:
     void        select_target(const Modeller::Target& t);
     void        draw_edge_value(const gui::Rect& canvas);
     void        draw_operation_value(const gui::Rect& canvas,
-                                     const std::string& label, const std::string& placeholder);
+                                     const std::string& label, const std::string& placeholder,
+                                     bool edge_slider = false);
+    void        draw_edge_slider(const gui::Rect& card, float top, float height);
+    bool        round_slider_drag_{false};
+    double      round_slider_value_{0.0};
+    double      round_slider_last_preview_{-1.0};
     ToolId      tool_modes_open_{ToolId::Select};
     int         sel_feature_body_{-1};
     int         sel_feature_{-1};

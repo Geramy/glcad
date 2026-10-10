@@ -42,6 +42,13 @@ apply_patches "$SRC" "$HERE/patches-rs"
 TRIPLE="${GLCAD_PGLITE_HOST_TRIPLE:-}"
 TARGET_OS=""
 case "$TRIPLE" in *mingw32*) TARGET_OS=Windows ;; esac
+# iOS apps may not ship loose executables or dylibs: link extensions statically.
+STATIC_EXTS=""
+if [ -n "$TRIPLE" ] && [ "$TARGET_OS" != Windows ]; then
+  case "${PG_SYSROOT:-} ${GLCAD_PGLITE_CC:-}" in
+    *iPhoneOS*|*iPhoneSimulator*) STATIC_EXTS=1 ;;
+  esac
+fi
 
 if [ "$TARGET_OS" = Windows ]; then
   # mingw: no zlib, host zic, no template (a win32 cluster is LLP64).
@@ -75,7 +82,8 @@ elif [ -n "$TRIPLE" ]; then
   fi
   mkdir -p "$SRC/native/out"
   WRAP="$SRC/native/out/glcad-target-cc"
-  printf '#!/bin/sh\nexec %s "$@"\n' "$GLCAD_PGLITE_CC" > "$WRAP"
+  printf '#!/bin/sh\nexec %s %s "$@"\n' "$GLCAD_PGLITE_CC" \
+      "${STATIC_EXTS:+-DPGL_STATIC_EXTS}" > "$WRAP"
   chmod +x "$WRAP"
   export CC="$WRAP"
   export host_alias="$TRIPLE"
@@ -153,6 +161,46 @@ EOF
   mkdir -p "$PREFIX/share/postgresql/extension"
   cp "$VEC/vector.control" "$VEC"/sql/vector--*.sql \
      "$PREFIX/share/postgresql/extension/"
+elif [ -n "$STATIC_EXTS" ]; then
+  EXTVERSION="$(sed -n 's/^EXTVERSION *= *//p' "$VEC/Makefile")"
+  for c in "$VEC"/src/*.c; do
+    "$CC" -O2 -fPIC -ftree-vectorize -fassociative-math -fno-signed-zeros \
+      -fno-trapping-math \
+      -DPg_magic_func=pgl_vector_Pg_magic_func -D_PG_init=pgl_vector__PG_init \
+      -I"$PREFIX/include/postgresql/server" \
+      -I"$PREFIX/include/postgresql/internal" \
+      -c "$c" -o "${c%.c}.o"
+  done
+  SYMS="Pg_magic_func=pgl_vector_Pg_magic_func _PG_init=pgl_vector__PG_init"
+  for f in $(nm -g --defined-only "$VEC"/src/*.o 2>/dev/null |
+             awk '$2=="T" && $3 ~ /^_pg_finfo_/ {print substr($3, 2)}' | sort -u); do
+    SYMS="$SYMS ${f#pg_finfo_}=${f#pg_finfo_} $f=$f"
+  done
+  {
+    echo 'extern void pgl_register_static_ext(const char *name,'
+    echo '    const char *const *symbol_names, void *const *symbol_addrs, int nsyms);'
+    for s in $SYMS; do echo "extern void ${s#*=}(void);"; done
+    echo 'static const char *const vector_symbol_names[] = {'
+    for s in $SYMS; do echo "	\"${s%%=*}\","; done
+    echo '};'
+    echo 'static void *const vector_symbol_addrs[] = {'
+    for s in $SYMS; do echo "	(void *) ${s#*=},"; done
+    echo '};'
+    echo 'void glcad_pgl_register_vector(void) {'
+    echo '	pgl_register_static_ext("vector", vector_symbol_names, vector_symbol_addrs,'
+    echo '		(int) (sizeof(vector_symbol_names) / sizeof(vector_symbol_names[0])));'
+    echo '}'
+  } > "$OUT/vector_static_ext.c"
+  "$CC" -O2 -fPIC -c "$OUT/vector_static_ext.c" -o "$OUT/vector_static_ext.o"
+  "$CC" -O2 -fPIC -c "$HERE/static_exts.c" -o "$OUT/glcad_static_exts.o"
+  xcrun libtool -static -o "$OUT/libpglite-static.a" "$OUT/libpglite.a" \
+      "$VEC"/src/*.o "$OUT"/build/src/pl/plpgsql/src/*.o \
+      "$OUT/vector_static_ext.o" "$OUT/glcad_static_exts.o"
+  mv -f "$OUT/libpglite-static.a" "$OUT/libpglite.a"
+  cp "$VEC/sql/vector.sql" "$VEC/sql/vector--$EXTVERSION.sql"
+  mkdir -p "$PREFIX/share/postgresql/extension"
+  cp "$VEC/vector.control" "$VEC/sql/vector--$EXTVERSION.sql" \
+     "$PREFIX/share/postgresql/extension/"
 elif [ -n "$TRIPLE" ]; then
   # pg_config is a target executable: compile pgvector by hand, as PGXS would.
   case "$TRIPLE" in
@@ -196,7 +244,23 @@ if [ ! -f "$TPL/PG_VERSION" ]; then
   fi
 fi
 
-PARTS="bin lib share"
-[ -d "$TPL" ] && PARTS="$PARTS pgdata-template"
-(cd "$PREFIX" && COPYFILE_DISABLE=1 tar -czf \
-    "$OUT/pglite-runtime.tar.gz" $PARTS)
+if [ -n "$STATIC_EXTS" ]; then
+  # Data only: no executables or loadable modules in an iOS bundle.
+  STAGE="$OUT/runtime-stage"
+  rm -rf "$STAGE"
+  mkdir -p "$STAGE/share/postgresql/extension"
+  for d in timezone timezonesets tsearch_data; do
+    cp -R "$PREFIX/share/postgresql/$d" "$STAGE/share/postgresql/"
+  done
+  for f in plpgsql.control plpgsql--1.0.sql vector.control "vector--$EXTVERSION.sql"; do
+    cp "$PREFIX/share/postgresql/extension/$f" "$STAGE/share/postgresql/extension/"
+  done
+  cp -R "$TPL" "$STAGE/pgdata-template"
+  (cd "$STAGE" && COPYFILE_DISABLE=1 tar -czf \
+      "$OUT/pglite-runtime.tar.gz" share pgdata-template)
+else
+  PARTS="bin lib share"
+  [ -d "$TPL" ] && PARTS="$PARTS pgdata-template"
+  (cd "$PREFIX" && COPYFILE_DISABLE=1 tar -czf \
+      "$OUT/pglite-runtime.tar.gz" $PARTS)
+fi

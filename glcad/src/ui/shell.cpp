@@ -1141,14 +1141,126 @@ void Shell::pointer_down(double x, double y) {
     mesh_dirty_ = true;
 }
 
-void Shell::finger_tap(double x, double y) {
+void Shell::settle_pointer(double x, double y) {
     pointer_move(x, y);
-    if (canvas_rect_.contains({float(x), float(y)}) && mode_ == Mode::Sketch &&
-        canvas_.tool() != Tool::Select && !text_placing_) {
+    if (!building_frame_ && (std::fabs(frame_mouse_.x - float(x)) > 0.5f || std::fabs(frame_mouse_.y - float(y)) > 0.5f))
+        build_frame();
+}
+
+void Shell::finger_tap(double x, double y) {
+    settle_pointer(x, y);
+    if (tap_region_at(x, y)) return;
+    const gui::Vec2 at{float(x), float(y)};
+    if (canvas_rect_.contains(at) && mode_ == Mode::Sketch &&
+        canvas_.tool() != Tool::Select && !text_placing_ &&
+        !placement_chip_rect_.contains(at) && !shapes_menu_rect_.contains(at)) {
         return;
     }
     pointer_down(x, y);
     pointer_up(x, y);
+}
+
+bool Shell::region_tap_target(double x, double y, Modeller::Target& t) {
+    const Tool tool = canvas_.tool();
+    const bool shape_tool = tool == Tool::Line || tool == Tool::Rect || tool == Tool::Circle ||
+                            tool == Tool::Arc || tool == Tool::Polyline || tool == Tool::Ellipse ||
+                            tool == Tool::Spline;
+    double sx, sy;
+    return mode_ == Mode::Sketch && shape_tool && !canvas_.pending() && !text_placing_ && !hatch_pending_ &&
+           !pick_.active() && !picking_sketch_plane_ && modeller_.op() == Modeller::Op::None &&
+           canvas_rect_.contains({float(x), float(y)}) && !ui_ctx_.covered_by_overlay({float(x), float(y)}) &&
+           to_plane(x, y, sx, sy) && canvas_.pick(sx, sy) == Canvas::npos &&
+           modeller_.target_at(camera_, x, y, t, false) && t.valid && !t.on_body;
+}
+
+bool Shell::tap_region_at(double x, double y) {
+    Modeller::Target t;
+    if (!region_tap_target(x, y, t)) return false;
+    return_to_select();
+    hover_target_ = t;
+    select_target(t);
+    return true;
+}
+
+void Shell::pencil_tap(double x, double y) {
+    settle_pointer(x, y);
+    if (tap_region_at(x, y)) return;
+    pointer_down(x, y);
+    pointer_up(x, y);
+}
+
+void Shell::pointer_input(PointerPhase phase, double x, double y, bool secondary) {
+    switch (phase) {
+        case PointerPhase::Down: {
+            settle_pointer(x, y);
+            pointer_secondary_ = secondary;
+            if (secondary) { right_down(x, y); return; }
+            Modeller::Target t;
+            if (region_tap_target(x, y, t)) {
+                pointer_deferred_ = true;
+                pointer_down_x_ = x; pointer_down_y_ = y;
+                return;
+            }
+            pointer_down(x, y);
+            return;
+        }
+        case PointerPhase::Move:
+            if (pointer_deferred_ && std::hypot(x - pointer_down_x_, y - pointer_down_y_) > px(4)) {
+                pointer_deferred_ = false;
+                pointer_down(pointer_down_x_, pointer_down_y_);
+            }
+            pointer_move(x, y);
+            return;
+        case PointerPhase::Up:
+            if (pointer_secondary_) { pointer_secondary_ = false; right_up(x, y); return; }
+            if (pointer_deferred_) {
+                pointer_deferred_ = false;
+                if (tap_region_at(pointer_down_x_, pointer_down_y_)) return;
+                pointer_down(pointer_down_x_, pointer_down_y_);
+            }
+            pointer_up(x, y);
+            return;
+    }
+}
+
+void Shell::apply_gesture(const TouchResult& r) {
+    const double fx = r.from_pencil ? r.x : r.raw_x, fy = r.from_pencil ? r.y : r.raw_y;
+    switch (r.gesture) {
+        case Gesture::Press:
+            pointer_move(fx, fy);
+            break;
+        case Gesture::Tap:
+            if (r.from_pencil) pencil_tap(r.x, r.y);
+            else finger_tap(r.raw_x, r.raw_y);
+            break;
+        case Gesture::Drag:
+            if (r.from_pencil) {
+                if (r.began) { settle_pointer(r.x, r.y); pointer_down(r.x, r.y); }
+                pointer_move(r.x, r.y);
+                if (r.ended) pencil_release(r.x, r.y);
+            } else {
+                if (r.began) middle_down(r.raw_x, r.raw_y);
+                pointer_move(r.raw_x, r.raw_y);
+                if (r.ended) middle_up(r.raw_x, r.raw_y);
+            }
+            break;
+        case Gesture::Pan:
+            if (r.dx != 0.0 || r.dy != 0.0) scroll(r.dx, r.dy, true);
+            if (std::fabs(r.scale - 1.0) > 1e-5) pinch(r.centre_x, r.centre_y, r.scale - 1.0);
+            break;
+        case Gesture::Zoom:
+            pinch(r.centre_x, r.centre_y, r.scale - 1.0);
+            break;
+        case Gesture::LongPress:
+            right_down(fx, fy);
+            right_up(fx, fy);
+            break;
+        case Gesture::TwoFingerTap:
+            key_special(1);
+            break;
+        default:
+            break;
+    }
 }
 
 void Shell::pencil_release(double x, double y) {
@@ -1835,6 +1947,7 @@ void Shell::request_file(FileAsk kind, std::function<void(std::string)> done) {
 
 void Shell::build_frame_body() {
     process_mcp_requests();
+    menu_markers_.clear();
     if (plot_preview_) { build_plot_preview_frame(); return; }
     images_.clear();
     canvas_.set_field_values(in_paper_space_ && active_layout() ? sheet_fields(*active_layout()) : std::map<std::string,std::string>{});
@@ -2767,6 +2880,7 @@ void Shell::layout_ui() {
     draw_text_entry();
     draw_view_cube(canvas_rect_);
     draw_unit_chip(canvas_rect_);
+    draw_placement_chip(canvas_rect_);
     ui_ctx_.draw().pop_clip();
     if (log_.size() > 1000) log_.erase(log_.begin(), log_.end() - 1000);
     command_history_rect_ = {};
@@ -2845,6 +2959,7 @@ void Shell::layout_ui() {
 
     ui_ctx_.end();
     ui_wants_mouse_ = ui_ctx_.wants_mouse();
+    frame_mouse_ = input_.mouse;
     note_edits();
 
     input_.pressed = false;
@@ -3438,11 +3553,15 @@ void Shell::report_modeller_error() {
 }
 
 void Shell::draw_operation_value(const gui::Rect& canvas,
-                                  const std::string& label, const std::string& placeholder) {
+                                  const std::string& label, const std::string& placeholder,
+                                  bool edge_slider) {
     ui_ctx_.push_id("operation_value");
     const auto id=ui_ctx_.id(label);
     value_focus_order_.push_back(id);
-    const float width=float(px(224)),height=float(px(64));
+    const float field_h=float(px(edge_slider && tablet_mode_ ? 44 : 32));
+    const float slider_h=float(px(tablet_mode_ ? 44 : 28)),ends_h=float(px(18));
+    const float width=float(px(edge_slider ? (tablet_mode_ ? 320 : 264) : 224));
+    const float height=edge_slider ? float(px(22+10+6))+field_h+slider_h+ends_h : float(px(64));
     float left=INFINITY,top=INFINITY,right=-INFINITY,bottom=-INFINITY;
     const auto include=[&](const gview::Point3& point) {
         double x,y;
@@ -3478,13 +3597,13 @@ void Shell::draw_operation_value(const gui::Rect& canvas,
     ui_ctx_.draw().round_rect(card,float(px(6)),theme.get(T::ui_surface_raised));
     gui::Rect caption=card; caption.h=float(px(22));
     gui::label(ui_ctx_,caption,label,gui::TextAlign::Left,true);
-    gui::Rect field{card.x+float(px(4)),caption.bottom(),float(px(158)),float(px(32))};
+    gui::Rect field{card.x+float(px(4)),caption.bottom(),edge_slider ? card.w-float(px(4+6+56+4)) : float(px(158)),field_h};
     std::string text=modeller_.typed();
     if (gui::text_field(ui_ctx_,field,label,text,placeholder)) {
         modeller_.set_typed(std::move(text));
         mesh_dirty_=true;
     }
-    gui::Rect ok{field.right()+float(px(6)),field.y,float(px(48)),field.h};
+    gui::Rect ok{field.right()+float(px(6)),field.y,float(px(edge_slider ? 56 : 48)),field.h};
     if (modeller_.value_preview_valid()) value_focus_order_.push_back(ui_ctx_.id("OK"));
     const bool enter=ui_ctx_.is_focused(id) && input_.key_enter;
     if (gui::button(ui_ctx_,ok,"OK",modeller_.value_preview_valid(),true) || enter) {
@@ -3495,8 +3614,62 @@ void Shell::draw_operation_value(const gui::Rect& canvas,
         }
         mesh_dirty_=true;
     }
+    if (edge_slider) draw_edge_slider(card,field.bottom()+float(px(6)),slider_h);
     report_modeller_error();
     ui_ctx_.pop_id();
+}
+
+void Shell::draw_edge_slider(const gui::Rect& card, float top, float height) {
+    const bool round=modeller_.op()!=Modeller::Op::ChamferEdge;
+    const gui::Rect row{card.x+float(px(10)),top,card.w-float(px(20)),height};
+    const gui::Rect ends{row.x,row.bottom(),row.w,float(px(16))};
+    const double limit=modeller_.edge_limit();
+    if (limit<0.0) {
+        gui::label(ui_ctx_,row,"Measuring the largest size...",gui::TextAlign::Left,true);
+        round_slider_drag_=false;
+        return;
+    }
+    if (limit==0.0) {
+        gui::label(ui_ctx_,row,round ? "This edge can't be rounded" : "This edge can't be bevelled",gui::TextAlign::Left,true);
+        round_slider_drag_=false;
+        return;
+    }
+    const gunit::Format fmt{canvas_.display_unit()};
+    const auto text_of=[&](double v) {
+        const double f=modeller_.floor_to_display(std::clamp(v,0.0,limit));
+        return f>0.0 ? gunit::format_length(f,fmt) : std::string();
+    };
+    double current=round_slider_drag_ ? round_slider_value_ : 0.0;
+    if (!round_slider_drag_) {
+        const auto parsed=gunit::parse_length(modeller_.typed(),canvas_.display_unit());
+        if (parsed && std::isfinite(*parsed) && *parsed>0) current=*parsed;
+        else if (modeller_.edge_applied()) current=modeller_.edge_value();
+    }
+    float v=float(std::clamp(current,0.0,limit));
+    const char* name=round ? "Round radius slider" : "Chamfer amount slider";
+    if (gui::slider(ui_ctx_,row,name,v,0.0f,float(limit))) {
+        round_slider_drag_=true;
+        round_slider_value_=double(v);
+        const double t=now_seconds();
+        if (round_slider_last_preview_<0.0 || t-round_slider_last_preview_>=0.05) {
+            round_slider_last_preview_=t;
+            modeller_.set_typed(text_of(round_slider_value_));
+            mesh_dirty_=true;
+        }
+    }
+    if (round_slider_drag_ && !input_.down) {
+        round_slider_drag_=false;
+        round_slider_last_preview_=-1.0;
+        const std::string text=text_of(round_slider_value_);
+        modeller_.set_typed(text);
+        if (!text.empty() && modeller_.commit_typed()) {
+            after_commit();
+            ui_ctx_.clear_focus();
+        }
+        mesh_dirty_=true;
+    }
+    gui::label(ui_ctx_,ends,"0",gui::TextAlign::Left,true);
+    gui::label(ui_ctx_,ends,"max "+gunit::format_length(limit,fmt),gui::TextAlign::Right,true);
 }
 
 void Shell::draw_edge_value(const gui::Rect& canvas) {
@@ -3510,7 +3683,7 @@ void Shell::draw_edge_value(const gui::Rect& canvas) {
         label=modeller_.op()==Modeller::Op::PatternBody ? "Count and spacing" : "Wall thickness";
         placeholder=modeller_.op()==Modeller::Op::PatternBody ? "4 2.5" : "Enter size";
     }
-    draw_operation_value(canvas,label,placeholder);
+    draw_operation_value(canvas,label,placeholder,modeller_.edge_kept());
 }
 
 void Shell::draw_pull_arrow(const gui::Rect& canvas) {
@@ -3816,7 +3989,7 @@ void Shell::draw_mode_switch(const gui::Rect& button, const gui::Rect& bar, bool
     const float unit=float(px(1));
     struct Choice {Mode mode;const char* name;gui::Icon icon;};
     static constexpr Choice choices[]={{Mode::Sketch,"Sketch",gui::Icon::NewSketch},
-        {Mode::Solid,"Solid",gui::Icon::Extrude},{Mode::Drawing,"Drawing",gui::Icon::Table}};
+        {Mode::Solid,"Solid",gui::Icon::Box},{Mode::Drawing,"Drawing",gui::Icon::Table}};
     const Choice* current=&choices[0];
     for(const auto& c:choices) if(c.mode==mode_) current=&c;
     ui_ctx_.push_id("mode-switch");
@@ -3876,9 +4049,22 @@ void Shell::draw_tablet_toolbar(gui::Rect& screen) {
     const float mode_full=std::max(button*2.5f,ui_ctx_.measure("Drawing",st.font_size)+80*unit);
     const bool compact_mode=screen.w<1200*unit;
     const float mode_width=compact_mode?button+20*unit:mode_full;
-    const float fixed=mode_width+gap+button+gap+button+gap+2*(button+gap)+utility_width;
-    const bool one_row=screen.w-2*gap-fixed>=3*(button+gap);
-    const auto bar=screen.cut_top(one_row?button+2*gap:2*button+3*gap);
+    const auto tools=toolbar_tools(mode_);
+    const float inner=screen.w-2*gap;
+    const float lead=mode_width+gap, first_cap=std::max(0.0f,inner-lead-2*(button+gap)-utility_width);
+    struct Placed {const ToolDef* tool;int row;float x;bool divider;};
+    std::vector<Placed> placed;
+    {
+        int row=0;float x=0,cap=first_cap;
+        for(const auto* t:tools) {
+            bool divider=x>0&&!placed.empty()&&placed.back().tool->group!=t->group;
+            if(x+button+(divider?gap:0)>cap&&(x>0||row==0)) {++row;x=0;cap=inner;divider=false;}
+            placed.push_back({t,row,x+(divider?gap:0),divider});
+            x+=button+(divider?gap:0)+gap;
+        }
+    }
+    const int rows=placed.empty()?1:placed.back().row+1;
+    const auto bar=screen.cut_top(rows*button+(rows+1)*gap);
     ui_ctx_.draw().rect(bar,theme.get(T::ui_surface));
     ui_ctx_.draw().line({bar.x,bar.bottom()},{bar.right(),bar.bottom()},1,theme.get(T::ui_border));
     ui_ctx_.push_id("tablet-toolbar");
@@ -3912,108 +4098,107 @@ void Shell::draw_tablet_toolbar(gui::Rect& screen) {
     if(tap(undo,"Undo",false,gui::Icon::Undo)) run_command("UNDO");
     if(tap(redo,"Redo",false,gui::Icon::Redo)) run_command("REDO");
     const gui::Rect mode_button=top.cut_left(mode_width);
-    top.cut_left(gap);
-    std::vector<const ToolGroupDef*> groups;
-    for(const auto& group:tool_groups()) if(group.mode==mode_) groups.push_back(&group);
-    if(tablet_last_active_!=active_tool_id_) {
-        tablet_last_active_=active_tool_id_;
-        tablet_popup_=0;
-        const auto* active=tool_def(active_tool_id_);
-        if(active) for(const auto* group:groups) if(group->group==active->group) tablet_group_=active->group;
-    }
-    auto selected=std::find_if(groups.begin(),groups.end(),[&](const auto* group){return group->group==tablet_group_;});
-    if(selected==groups.end()) {
-        tablet_group_=mode_==Mode::Solid?ToolGroup::Create:mode_==Mode::Drawing?ToolGroup::Layout:ToolGroup::Draw;
-        selected=std::find_if(groups.begin(),groups.end(),[&](const auto* group){return group->group==tablet_group_;});
-        tablet_popup_=0;
-    }
-    const auto* group=selected==groups.end()?groups.front():*selected;
-    gui::Rect row=one_row?top:gui::Rect{bar.x+gap,bar.y+gap+button+gap,bar.w-2*gap,button};
-    const gui::Rect category=(one_row?row:top).cut_left(button);
-    if(one_row) row.cut_left(gap);
-    const auto toggle=[&](int popup) { tablet_popup_=tablet_popup_==popup?0:popup; tablet_popup_page_=0; mode_menu_open_=false; };
-    if(tap(category,std::string(group->caption)+" tools",tablet_popup_==1,gui::Icon::Pattern)) toggle(1);
-    {
-        const auto c=category;
-        ui_ctx_.draw().triangle({c.right()-10*unit,c.bottom()-5*unit},{c.right()-4*unit,c.bottom()-5*unit},
-            {c.right()-4*unit,c.bottom()-11*unit},theme.get(tablet_popup_==1?T::ui_accent_text:T::ui_text));
-    }
-    const gui::Rect more=row.cut_right(button);
-    std::vector<const ToolDef*> tools;
-    for(const auto& tool:tool_defs()) if(tool.group==group->group) tools.push_back(&tool);
-    const auto active=std::find_if(tools.begin(),tools.end(),[&](const auto* tool){return tool->id==active_tool_id_;});
-    if(active!=tools.end()) std::rotate(tools.begin(),active,active+1);
-    std::vector<const ToolDef*> shown=tools;
-    for(const auto* other:groups) if(other!=group)
-        for(const auto& tool:tool_defs()) if(tool.group==other->group) shown.push_back(&tool);
-    gui::Rect optionsAnchor=more;
-    Tool optionsTool=Tool::Select;
-    ToolGroup last_group=group->group;
-    for(const auto* tool:shown) {
-        const auto ct=tool->id==ToolId::Rect?Tool::Rect:tool->id==ToolId::Circle?Tool::Circle:tool->id==ToolId::Arc?Tool::Arc:Tool::Select;
-        const bool options=!Canvas::tool_modes(ct).empty();
-        const bool divider=tool->group!=last_group;
-        const float needed=button+(options?button:0)+(divider?gap:0);
-        if(row.x+needed>more.x-gap) break;
-        if(divider) {
-            ui_ctx_.draw().line({row.x,row.y+8*unit},{row.x,row.bottom()-8*unit},1,theme.get(T::ui_border));
-            row.cut_left(gap);
-            last_group=tool->group;
+    for(const auto& p:placed) {
+        const auto* tool=p.tool;
+        const float x0=p.row==0?bar.x+gap+lead:bar.x+gap;
+        const float y=bar.y+gap+p.row*(button+gap);
+        if(p.divider) ui_ctx_.draw().line({x0+p.x-gap*.5f,y+8*unit},{x0+p.x-gap*.5f,y+button-8*unit},1,theme.get(T::ui_border));
+        const gui::Rect r{x0+p.x,y,button,button};
+        const bool shapes=tool->id==ToolId::Count;
+        if(shapes) shapes_anchor_=r;
+        const bool on=shapes?is_shape_tool(active_tool_id_)||shapes_open_:tool->id==active_tool_id_;
+        if(tap(r,tool->label,on,tool->icon,tool->wired)) {
+            if(shapes) shapes_open_=!shapes_open_;
+            else {activate_tool(tool->id);shapes_open_=false;}
+            mode_menu_open_=false;
         }
-        auto r=row.cut_left(button);
-        if(tap(r,tool->label,tool->id==active_tool_id_,tool->icon,tool->wired)) { activate_tool(tool->id); tablet_popup_=0; mode_menu_open_=false; }
-        if(options) {
-            auto arrow=row.cut_left(button);
-            const std::string label=std::string(tool->label)+" options";
-            ui_ctx_.push_id(label);
-            const bool open=tablet_popup_==3&&tool_modes_open_==tool->id;
-            const auto hit=ui_ctx_.interact(ui_ctx_.id("arrow"),arrow,tool->wired);
-            ui_ctx_.announce(ui_ctx_.id("arrow"),gui::Context::Role::Button,label,open?"expanded":"collapsed",arrow,open,!tool->wired);
-            if(hit.hovered||hit.held||open) ui_ctx_.draw().round_rect(arrow,5*unit,theme.get(T::ui_accent));
-            const auto center=arrow.centre();
-            ui_ctx_.draw().triangle({center.x-4*unit,center.y-2*unit},{center.x+4*unit,center.y-2*unit},
-                {center.x,center.y+3*unit},theme.get(hit.hovered||open?T::ui_accent_text:T::ui_text));
-            if(hit.clicked) { tablet_popup_=open?0:3; tool_modes_open_=tool->id; tablet_popup_page_=0; mode_menu_open_=false; }
-            if(tablet_popup_==3&&tool_modes_open_==tool->id) {optionsAnchor=arrow;optionsTool=ct;}
-            ui_ctx_.pop_id();
+        if(shapes) {
+            gui::draw_menu_marker(ui_ctx_,r,theme.get(on?T::ui_accent_text:T::ui_text),unit);
+            menu_markers_.push_back({tool->label,r});
         }
-        row.cut_left(gap);
     }
-    if(tap(more,"More tools",tablet_popup_==2,gui::Icon::Menu)) toggle(2);
-    if(tablet_popup_==3&&optionsTool==Tool::Select) tablet_popup_=0;
     draw_mode_switch(mode_button,bar,compact_mode);
-    if(tablet_popup_) {
-        struct Entry {std::string label;std::function<void()> action;bool enabled=true;};
-        std::vector<Entry> entries;
-        if(tablet_popup_==1) for(const auto* choice:groups) entries.push_back({choice->caption,[&,choice]{tablet_group_=choice->group;}});
-        else if(tablet_popup_==2) for(const auto* tool:tools) entries.push_back({tool->label,[&,tool]{activate_tool(tool->id);},tool->wired});
-        else for(std::size_t i=0;i<Canvas::tool_modes(optionsTool).size();++i)
-            entries.push_back({Canvas::tool_modes(optionsTool)[i],[&,i]{canvas_.set_tool_mode(optionsTool,int(i));activate_tool(tool_modes_open_);}});
-        const auto anchor=tablet_popup_==1?category:tablet_popup_==2?more:optionsAnchor;
-        const float width=std::min(280*unit,bar.w-2*gap), y=anchor.bottom()+4*unit;
-        const int capacity=std::max(1,int((float(vh_)-y-gap)/button)-1);
-        const int pages=std::max(1,(int(entries.size())+capacity-1)/capacity);
-        tablet_popup_page_=std::clamp(tablet_popup_page_,0,pages-1);
-        const int first=tablet_popup_page_*capacity,last=std::min(int(entries.size()),first+capacity);
-        gui::Rect drop{std::clamp(anchor.x,bar.x+gap,bar.right()-gap-width),y,width,
-            button*(last-first+(pages>1?1:0))};
-        ui_ctx_.begin_overlay(drop);
-        ui_ctx_.draw().round_rect(drop,6*unit,theme.get(T::ui_surface_raised));
-        ui_ctx_.draw().border(drop,6*unit,1,theme.get(T::ui_border));
-        for(int i=first;i<last;++i) {
-            gui::Rect item{drop.x,drop.y+(i-first)*button,drop.w,button};
-            ui_ctx_.push_id("popup-"+std::to_string(i));
-            const bool current=tablet_popup_==1&&groups[std::size_t(i)]==group;
-            if(tap(item,entries[i].label,current,gui::Icon::None,entries[i].enabled)) {entries[i].action();tablet_popup_=0;}
-            ui_ctx_.pop_id();
+    ui_ctx_.pop_id();
+    draw_shapes_menu(button);
+}
+
+void Shell::draw_shapes_menu(float row_h) {
+    shapes_menu_rect_={};
+    if(!shapes_open_) return;
+    const auto& theme=themes_.active();
+    const auto& st=ui_ctx_.style();
+    struct Entry {std::string label;ToolId tool;const char* command;bool active;};
+    std::vector<Entry> entries;
+    for(const auto* t:shape_tools(mode_)) entries.push_back({t->label,t->id,nullptr,t->id==active_tool_id_});
+    for(const auto& c:shape_commands(mode_)) entries.push_back({c.label,ToolId::Count,c.command,false});
+    const auto anchor=shapes_anchor_;
+    const float width=float(px(220));
+    gui::Rect drop{std::clamp(anchor.x,0.0f,std::max(0.0f,float(vw_)-width)),anchor.bottom()+float(px(4)),width,row_h*float(entries.size())};
+    shapes_menu_rect_=drop;
+    ui_ctx_.push_id("shapes-menu");
+    ui_ctx_.begin_overlay(drop);
+    ui_ctx_.draw().shadow(drop,float(px(6)),float(px(10)),theme.get(T::ui_shadow));
+    ui_ctx_.draw().round_rect(drop,float(px(6)),theme.get(T::ui_surface_raised));
+    ui_ctx_.draw().border(drop,float(px(6)),1,theme.get(T::ui_border));
+    for(std::size_t i=0;i<entries.size();++i) {
+        const auto& e=entries[i];
+        gui::Rect item{drop.x,drop.y+float(i)*row_h,drop.w,row_h};
+        const auto id=ui_ctx_.id(e.label);
+        const auto hit=ui_ctx_.interact(id,item);
+        ui_ctx_.announce(id,gui::Context::Role::Button,e.label,"",item,e.active,false);
+        if(e.active||hit.hovered||hit.held) ui_ctx_.draw().round_rect(item.deflate(gui::Insets::all(float(px(2)))),float(px(4)),
+            theme.get(e.active?T::ui_accent:T::ui_hover));
+        if(const auto* def=tool_def(e.tool)) gui::draw_icon(ui_ctx_,def->icon,{item.x+float(px(4)),item.y,row_h,row_h},
+            theme.get(e.active?T::ui_accent_text:T::ui_text),1.3f);
+        ui_ctx_.draw().text({item.x+row_h+float(px(8)),item.y,item.w-row_h-float(px(12)),item.h},e.label,st.font_size,
+            theme.get(e.active?T::ui_accent_text:T::ui_text),gui::TextAlign::Left);
+        if(hit.clicked) {
+            shapes_open_=false;
+            if(e.command) run_command(e.command);
+            else activate_tool(e.tool);
         }
-        if(pages>1) {
-            gui::Rect navigation{drop.x,drop.bottom()-button,drop.w,button};
-            if(tap(navigation.cut_left(drop.w*.5f),"Previous tools",false,gui::Icon::None,tablet_popup_page_>0)) --tablet_popup_page_;
-            if(tap(navigation,"Next tools",false,gui::Icon::None,tablet_popup_page_+1<pages)) ++tablet_popup_page_;
+    }
+    if(input_.key_escape||(input_.pressed&&!drop.contains(input_.mouse)&&!anchor.contains(input_.mouse))) shapes_open_=false;
+    ui_ctx_.end_overlay();
+    ui_ctx_.pop_id();
+}
+
+void Shell::draw_placement_chip(const gui::Rect& canvas) {
+    placement_chip_rect_={};
+    const Tool ct=active_tool_id_==ToolId::Rect?Tool::Rect:active_tool_id_==ToolId::Circle?Tool::Circle:
+                  active_tool_id_==ToolId::Arc?Tool::Arc:Tool::Select;
+    const auto modes=Canvas::tool_modes(ct);
+    if(modes.empty()||mode_==Mode::Solid) return;
+    const auto& theme=themes_.active();
+    const auto& st=ui_ctx_.style();
+    const float h=float(px(tablet_mode_?44:30)),pad=float(px(14));
+    float total=0;
+    for(const auto& m:modes) total+=ui_ctx_.measure(m,st.font_size)+2*pad;
+    gui::Rect chip{canvas.x+(canvas.w-total)*.5f,canvas.y+float(px(12)),total,h};
+    chip.x=std::max(chip.x,canvas.x+float(px(88)));
+    placement_chip_rect_=chip;
+    ui_ctx_.push_id("placement-chip");
+    ui_ctx_.draw().shadow(chip,h*.5f,float(px(8)),theme.get(T::ui_shadow));
+    ui_ctx_.draw().round_rect(chip,h*.5f,theme.get(T::ui_surface_raised));
+    ui_ctx_.draw().border(chip,h*.5f,1,theme.get(T::ui_border));
+    const int current=canvas_.tool_mode(ct);
+    float x=chip.x;
+    for(std::size_t i=0;i<modes.size();++i) {
+        const float w=ui_ctx_.measure(modes[i],st.font_size)+2*pad;
+        const gui::Rect seg{x,chip.y,w,h};
+        x+=w;
+        const auto id=ui_ctx_.id(modes[i]);
+        const auto hit=ui_ctx_.interact(id,seg);
+        const bool on=int(i)==current;
+        ui_ctx_.announce(id,gui::Context::Role::Button,modes[i],"",seg,on,false);
+        if(on||hit.hovered) ui_ctx_.draw().round_rect(seg.deflate(gui::Insets::all(float(px(3)))),(h-float(px(6)))*.5f,
+            theme.get(on?T::ui_accent:T::ui_hover));
+        ui_ctx_.draw().text(seg,modes[i],st.font_size,theme.get(on?T::ui_accent_text:T::ui_text),gui::TextAlign::Centre);
+        if(hit.clicked&&!on) {
+            canvas_.set_tool_mode(ct,int(i));
+            activate_tool(active_tool_id_);
+            if(const auto* def=tool_def(active_tool_id_)) log_.push_back(std::string(def->label)+": "+modes[i]);
         }
-        if(input_.key_escape||(input_.pressed&&!drop.contains(input_.mouse)&&!anchor.contains(input_.mouse))) tablet_popup_=0;
-        ui_ctx_.end_overlay();
     }
     ui_ctx_.pop_id();
 }
@@ -4063,15 +4248,14 @@ void Shell::draw_toolbar(gui::Rect& screen) {
             gui::Rect b = cursor.cut_left(btn);
             b.h = btn;
             ui_ctx_.push_id(d.label);
-            const Tool ct = d.id == ToolId::Rect ? Tool::Rect : d.id == ToolId::Circle ? Tool::Circle
-                          : d.id == ToolId::Arc ? Tool::Arc : Tool::Select;
-            const auto modes = Canvas::tool_modes(ct);
-            const gui::Rect corner{b.right() - float(px(12)), b.bottom() - float(px(12)),
-                                   float(px(12)), float(px(12))};
-            const auto in = ui_ctx_.interact(ui_ctx_.id("t"), b,
-                d.wired && (modes.empty() || !corner.contains(input_.mouse)));
-            const bool on = d.wired && active_tool_id_ == d.id &&
-                            (d.id != ToolId::Select || (!picking_sketch_plane_ && modeller_.op() == Modeller::Op::None));
+            const bool shapes = d.id == ToolId::Count;
+            if (shapes) shapes_anchor_ = b;
+            const auto tid = ui_ctx_.id("t");
+            const auto in = ui_ctx_.interact(tid, b, d.wired);
+            const bool on = d.wired && (shapes ? is_shape_tool(active_tool_id_) || shapes_open_ :
+                            active_tool_id_ == d.id &&
+                            (d.id != ToolId::Select || (!picking_sketch_plane_ && modeller_.op() == Modeller::Op::None)));
+            ui_ctx_.announce(tid, gui::Context::Role::Button, d.label, "", b, on, !d.wired);
             gui::Color ink = theme.get(on ? T::ui_accent_text : T::ui_text);
             if (!d.wired) ink.a = 0.38f;
             if (on) ui_ctx_.draw().round_rect(b, float(px(8)), theme.get(T::ui_accent));
@@ -4083,6 +4267,10 @@ void Shell::draw_toolbar(gui::Rect& screen) {
             gui::Rect ib{b.centre().x - float(px(20)), b.centre().y - float(px(20)),
                          float(px(40)), float(px(40))};
             gui::draw_icon(ui_ctx_, d.icon, ib, ink, 1.6f);
+            if (shapes) {
+                gui::draw_menu_marker(ui_ctx_, b, ink, float(px(1)));
+                menu_markers_.push_back({d.label, b});
+            }
             if (in.hovered) {
                 std::string tip = d.label;
                 if (!d.wired) tip += " (not connected yet)";
@@ -4094,61 +4282,10 @@ void Shell::draw_toolbar(gui::Rect& screen) {
                 ui_ctx_.draw().border(tr, float(px(4)), 1.0f, theme.get(T::ui_border));
                 ui_ctx_.draw().text(tr, tip, st.font_size_small, theme.get(T::ui_text), gui::TextAlign::Centre);
             }
-            bool arrow_hit = false;
-            if (!modes.empty()) {
-                const auto arrow_id = ui_ctx_.id("modes");
-                const auto cin = ui_ctx_.interact(arrow_id, corner, d.wired);
-                ui_ctx_.announce(arrow_id, gui::Context::Role::Button,
-                    std::string(d.label) + " options", tool_modes_open_ == d.id ? "expanded" : "collapsed",
-                    corner, tool_modes_open_ == d.id, !d.wired);
-                const bool highlighted = cin.hovered || cin.held || tool_modes_open_ == d.id;
-                if (highlighted)
-                    ui_ctx_.draw().round_rect(corner, float(px(3)),
-                        theme.get(on ? T::ui_surface_raised : T::ui_accent));
-                const gui::Vec2 t0{b.right() - float(px(4)), b.bottom() - float(px(4))};
-                ui_ctx_.draw().triangle(t0, {t0.x - float(px(6)), t0.y}, {t0.x, t0.y - float(px(6))},
-                    highlighted ? theme.get(on ? T::ui_accent : T::ui_accent_text) : ink);
-                if (cin.clicked) { tool_modes_open_ = tool_modes_open_ == d.id ? ToolId::Select : d.id; arrow_hit = true; }
-                if (tool_modes_open_ == d.id) {
-                    const float row_h = float(px(28));
-                    float w = 0.0f;
-                    for (const auto& m : modes) w = std::max(w, ui_ctx_.measure(m, st.font_size) + float(px(40)));
-                    gui::Rect list{std::min(b.x, std::max(bar.x, bar.right() - w)),
-                                   b.bottom() + float(px(4)), w, row_h * float(modes.size())};
-                    ui_ctx_.begin_overlay(list);
-                    ui_ctx_.draw().shadow(list, float(px(6)), float(px(10)), theme.get(T::ui_shadow));
-                    ui_ctx_.draw().round_rect(list, float(px(6)), theme.get(T::ui_surface_raised));
-                    ui_ctx_.draw().border(list, float(px(6)), 1.0f, theme.get(T::ui_border));
-                    for (std::size_t m = 0; m < modes.size(); ++m) {
-                        gui::Rect row{list.x, list.y + row_h * float(m), list.w, row_h};
-                        ui_ctx_.push_id("m" + std::to_string(m));
-                        const auto rin = ui_ctx_.interact(ui_ctx_.id("row"), row);
-                        ui_ctx_.announce(ui_ctx_.id("row"), gui::Context::Role::Row, modes[m], "", row,
-                            canvas_.tool_mode(ct) == static_cast<int>(m));
-                        ui_ctx_.pop_id();
-                        const bool cur = canvas_.tool_mode(ct) == static_cast<int>(m);
-                        if (rin.hovered) ui_ctx_.draw().rect(row, theme.get(T::ui_hover));
-                        gui::Rect tick = row.deflate(gui::Insets::xy(float(px(10)), 0));
-                        tick.w = float(px(18));
-                        if (cur) ui_ctx_.draw().text(tick, "\xe2\x9c\x93", st.font_size, theme.get(T::ui_accent), gui::TextAlign::Left);
-                        gui::Rect lbl = row.deflate(gui::Insets::xy(float(px(10)), 0));
-                        lbl.x += float(px(20));
-                        lbl.w -= float(px(20));
-                        ui_ctx_.draw().text(lbl, modes[m], st.font_size,
-                                            theme.get(cur ? T::ui_accent : T::ui_text), gui::TextAlign::Left);
-                        if (rin.clicked) {
-                            canvas_.set_tool_mode(ct, static_cast<int>(m));
-                            tool_modes_open_ = ToolId::Select;
-                            activate_tool(d.id);
-                            log_.push_back(std::string(d.label) + ": " + modes[m]);
-                        }
-                    }
-                    if (input_.pressed && !list.contains(input_.mouse) && !corner.contains(input_.mouse))
-                        tool_modes_open_ = ToolId::Select;
-                    ui_ctx_.end_overlay();
-                }
+            if (in.clicked && d.wired) {
+                if (shapes) shapes_open_ = !shapes_open_;
+                else { activate_tool(d.id); shapes_open_ = false; }
             }
-            if (in.clicked && d.wired && !arrow_hit) activate_tool(d.id);
             ui_ctx_.pop_id();
             cursor.cut_left(float(px(2)));
         }
@@ -4163,6 +4300,7 @@ void Shell::draw_toolbar(gui::Rect& screen) {
     }
     ui_ctx_.pop_id();
     draw_mode_switch(layout.modes, bar, false);
+    draw_shapes_menu(float(px(30)));
 }
 
 

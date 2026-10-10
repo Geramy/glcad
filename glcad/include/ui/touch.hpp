@@ -36,8 +36,11 @@ enum class Gesture : u8 {
 const char* gesture_name(Gesture g) noexcept;
 
 struct TouchSettings {
+    f64 scale{1.0};                // touch units per point
     f64 tap_slop{10.0};
     f64 tap_seconds{0.25};
+    f64 finger_tap_slop{20.0};
+    f64 finger_tap_seconds{0.40};
 
     f64 long_press_seconds{0.45};
     f64 long_press_slop{12.0};

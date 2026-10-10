@@ -32,8 +32,9 @@ ToolbarLayout layout_toolbar(Mode mode, const gui::Rect& area, float scale) {
     for (const auto& group : tool_groups()) {
         if (group.mode != mode) continue;
         std::vector<const ToolDef*> defs;
-        for (const auto& tool : tool_defs())
-            if (tool.group == group.group) defs.push_back(&tool);
+        for (const auto* tool : toolbar_tools(mode))
+            if (tool->group == group.group) defs.push_back(tool);
+        if (defs.empty()) continue;
         const float group_width = defs.size() * pitch - gap;
         if (group_width <= width && x + group_width > row_right() && x + 3 * pitch > row_right()) next_row();
         std::size_t at = 0;
@@ -78,15 +79,15 @@ const std::vector<ToolGroupDef>& tool_groups() {
 
 const std::vector<ToolDef>& tool_defs() {
     static const std::vector<ToolDef> t = {
-        {ToolId::Select,      "Select",       Icon::Point,      "SELECT",      ToolGroup::SketchSelect, true},
+        {ToolId::Select,      "Select",       Icon::Cursor,      "SELECT",      ToolGroup::SketchSelect, true},
         {ToolId::Line,        "Line",         Icon::Line,       "LINE",        ToolGroup::Draw,     true},
         {ToolId::Polyline,    "Polyline",     Icon::Polyline,   "PLINE",       ToolGroup::Draw,     true},
         {ToolId::Rect,        "Rectangle",    Icon::Rect,       "RECTANG",     ToolGroup::Draw,     true},
         {ToolId::Circle,      "Circle",       Icon::Circle,     "CIRCLE",      ToolGroup::Draw,     true},
         {ToolId::Arc,         "Arc",          Icon::Arc,        "ARC",         ToolGroup::Draw,     true},
-        {ToolId::Ellipse,     "Ellipse",      Icon::Ellipse,    "ELLIPSE",     ToolGroup::Draw,     true},
+        {ToolId::Ellipse,     "Ellipse",      Icon::EllipseShape,    "ELLIPSE",     ToolGroup::Draw,     true},
         {ToolId::Spline,      "Spline",       Icon::Spline,     "SPLINE",      ToolGroup::Draw,     true},
-        {ToolId::Polygon,     "Polygon",      Icon::Rect,       "POLYGON",     ToolGroup::Draw,     true},
+        {ToolId::Polygon,     "Polygon",      Icon::Polygon,       "POLYGON",     ToolGroup::Draw,     true},
         {ToolId::Point,       "Point",        Icon::Point,      "POINT",       ToolGroup::Draw,     true},
         {ToolId::Hatch,       "Hatch",        Icon::Hatch,      "HATCH",       ToolGroup::Draw,     true},
         {ToolId::Move,        "Move",         Icon::Move,       "MOVE",        ToolGroup::Modify,   true},
@@ -99,23 +100,22 @@ const std::vector<ToolDef>& tool_defs() {
         {ToolId::Fillet,      "Fillet",       Icon::Fillet,     "FILLET",      ToolGroup::Modify,   true},
         {ToolId::Chamfer,     "Chamfer",      Icon::Chamfer,    "CHAMFER",     ToolGroup::Modify,   true},
         {ToolId::Scale,       "Scale",        Icon::Scale,      "SCALE",       ToolGroup::Modify,   true},
-        {ToolId::Stretch,     "Stretch",      Icon::Move,       "STRETCH",     ToolGroup::Modify,   true},
-        {ToolId::Break,       "Break",        Icon::Trim,       "BREAK",       ToolGroup::Modify,   true},
+        {ToolId::Stretch,     "Stretch",      Icon::Stretch,       "STRETCH",     ToolGroup::Modify,   true},
+        {ToolId::Break,       "Break",        Icon::BreakLine,       "BREAK",       ToolGroup::Modify,   true},
         {ToolId::ArrayRect,   "Array",        Icon::Array,      "ARRAY",       ToolGroup::Modify,   true},
-        {ToolId::ArrayPolar,  "Polar array",  Icon::Array,      "ARRAYPOLAR",  ToolGroup::Modify,   true},
-        {ToolId::GroupSel,    "Group",        Icon::Array,      "GROUPSEL",    ToolGroup::Modify,   true},
+        {ToolId::ArrayPolar,  "Polar array",  Icon::PolarArray,      "ARRAYPOLAR",  ToolGroup::Modify,   true},
+        {ToolId::GroupSel,    "Group",        Icon::Group,      "GROUPSEL",    ToolGroup::Modify,   true},
         {ToolId::Ungroup,     "Ungroup",      Icon::Explode,    "EXPLODE",     ToolGroup::Modify,   true},
         {ToolId::DimLinear,   "Linear",       Icon::Dimension,  "DIMLINEAR",   ToolGroup::Annotate, true},
         {ToolId::DimAligned,  "Aligned",      Icon::Ortho,      "DIMALIGNED",  ToolGroup::Annotate, true},
         {ToolId::MeasureDistance, "Measure",  Icon::Measure,    "DIST",        ToolGroup::Annotate, true},
-        {ToolId::DimRadius,   "Radius",       Icon::Circle,     "DIMRADIUS",   ToolGroup::Annotate, true},
-        {ToolId::DimDiameter, "Diameter",     Icon::Point,      "DIMDIAMETER", ToolGroup::Annotate, true},
-        {ToolId::DimAngular,  "Angular",      Icon::Arc,        "DIMANGULAR",  ToolGroup::Annotate, true},
-        {ToolId::Hatch,       "Hatch",        Icon::Hatch,      "BHATCH",      ToolGroup::Annotate, true},
+        {ToolId::DimRadius,   "Radius",       Icon::Radius,     "DIMRADIUS",   ToolGroup::Annotate, true},
+        {ToolId::DimDiameter, "Diameter",     Icon::Diameter,      "DIMDIAMETER", ToolGroup::Annotate, true},
+        {ToolId::DimAngular,  "Angular",      Icon::Angle,        "DIMANGULAR",  ToolGroup::Annotate, true},
         {ToolId::Text,        "Text",         Icon::Text,       "TEXT",        ToolGroup::Annotate, true},
         {ToolId::FinishSketch,"Finish",       Icon::Finish,     "FINISH",      ToolGroup::Finish,   true},
 
-        {ToolId::Select,      "Select",       Icon::Point,      "SELECT",      ToolGroup::DrawingSelect, true},
+        {ToolId::Select,      "Select",       Icon::Cursor,      "SELECT",      ToolGroup::DrawingSelect, true},
         {ToolId::PlaceLayout, "Place",        Icon::Move,       "PLACELAYOUT", ToolGroup::Layout,   true},
         {ToolId::Line,        "Line",         Icon::Line,       "LINE",        ToolGroup::Markup,   true},
         {ToolId::Rect,        "Rectangle",    Icon::Rect,       "RECTANG",     ToolGroup::Markup,   true},
@@ -125,13 +125,13 @@ const std::vector<ToolDef>& tool_defs() {
         {ToolId::DimAligned,  "Aligned",      Icon::Ortho,      "DIMALIGNED",  ToolGroup::Markup,   true},
         {ToolId::MeasureDistance, "Measure",  Icon::Measure,    "DIST",        ToolGroup::Markup,   true},
 
-        {ToolId::Select,      "Select",       Icon::Point,      "SELECT",      ToolGroup::SolidSelect, true},
+        {ToolId::Select,      "Select",       Icon::Cursor,      "SELECT",      ToolGroup::SolidSelect, true},
         {ToolId::NewSketch,   "New sketch",   Icon::NewSketch,  "SKETCH",      ToolGroup::Sketch,   true},
         {ToolId::Box,         "Box",          Icon::Box,        "BOX",         ToolGroup::Create,   true},
-        {ToolId::Cylinder,    "Cylinder",     Icon::Circle,     "CYLINDER",    ToolGroup::Create,   true},
-        {ToolId::Sphere,      "Sphere",       Icon::Circle,     "SPHERE",      ToolGroup::Create,   true},
+        {ToolId::Cylinder,    "Cylinder",     Icon::Cylinder,     "CYLINDER",    ToolGroup::Create,   true},
+        {ToolId::Sphere,      "Sphere",       Icon::Sphere,     "SPHERE",      ToolGroup::Create,   true},
         {ToolId::Extrude,     "Extrude",      Icon::Extrude,    "EXTRUDE",     ToolGroup::Create,   true},
-        {ToolId::PressPull,   "Push/Pull",    Icon::Extrude,    "PRESSPULL",   ToolGroup::Create,   true},
+        {ToolId::PressPull,   "Push/Pull",    Icon::PushPull,    "PRESSPULL",   ToolGroup::Create,   true},
         {ToolId::Revolve,     "Revolve",      Icon::Revolve,    "REVOLVE",     ToolGroup::Create,   true},
         {ToolId::Sweep,       "Sweep",        Icon::Sweep,      "SWEEP",       ToolGroup::Create,   true},
         {ToolId::Loft,        "Loft",         Icon::Loft,       "LOFT",        ToolGroup::Create,   true},
@@ -139,10 +139,10 @@ const std::vector<ToolDef>& tool_defs() {
         {ToolId::ChamferEdge, "Chamfer",      Icon::Chamfer,    "CHAMFEREDGE", ToolGroup::Refine,   true},
         {ToolId::ShellBody,   "Shell",        Icon::Shell,      "SHELL",       ToolGroup::Refine,   true},
         {ToolId::OffsetFace,  "Offset face",  Icon::Offset,     "OFFSETFACE",  ToolGroup::Refine,   true},
-        {ToolId::Hole,        "Hole",         Icon::Circle,     "HOLE",        ToolGroup::Refine,   true},
-        {ToolId::Draft,       "Draft",        Icon::Chamfer,    "DRAFT",       ToolGroup::Refine,   true},
+        {ToolId::Hole,        "Hole",         Icon::Hole,     "HOLE",        ToolGroup::Refine,   true},
+        {ToolId::Draft,       "Draft",        Icon::Draft,    "DRAFT",       ToolGroup::Refine,   true},
         {ToolId::Split,       "Split",        Icon::Split,      "SPLIT",       ToolGroup::Refine,   true},
-        {ToolId::Slice,       "Slice",        Icon::Section,    "SLICE",       ToolGroup::Refine,   true},
+        {ToolId::Slice,       "Slice",        Icon::Slice,    "SLICE",       ToolGroup::Refine,   true},
         {ToolId::DeleteBody,  "Delete",       Icon::DeleteBody, "DELETEBODY",  ToolGroup::Refine,   true},
         {ToolId::Union,       "Union",        Icon::Union,      "UNION",       ToolGroup::Combine,  true},
         {ToolId::Subtract,    "Subtract",     Icon::Subtract,   "SUBTRACT",    ToolGroup::Combine,  true},
@@ -155,6 +155,55 @@ const std::vector<ToolDef>& tool_defs() {
         {ToolId::MirrorBody,  "Mirror",       Icon::Mirror,     "MIRROR3D",    ToolGroup::Transform, true},
     };
     return t;
+}
+
+std::vector<const ToolDef*> tools_for_mode(Mode mode) {
+    std::vector<const ToolDef*> out;
+    for (const auto& group : tool_groups()) {
+        if (group.mode != mode) continue;
+        for (const auto& tool : tool_defs())
+            if (tool.group == group.group &&
+                std::none_of(out.begin(), out.end(), [&](const ToolDef* t) { return t->id == tool.id; }))
+                out.push_back(&tool);
+    }
+    return out;
+}
+
+bool is_shape_tool(ToolId id) noexcept {
+    switch (id) {
+        case ToolId::Rect: case ToolId::Circle: case ToolId::Arc: case ToolId::Ellipse: case ToolId::Polygon:
+        case ToolId::Box: case ToolId::Cylinder: case ToolId::Sphere: return true;
+        default: return false;
+    }
+}
+
+std::vector<const ToolDef*> shape_tools(Mode mode) {
+    std::vector<const ToolDef*> out;
+    for (const auto* t : tools_for_mode(mode)) if (is_shape_tool(t->id)) out.push_back(t);
+    return out;
+}
+
+const std::vector<ShapeCommand>& shape_commands(Mode mode) {
+    static const std::vector<ShapeCommand> solid = {{"Cone", "CONE"}, {"Wedge", "WEDGE"}, {"Torus", "TORUS"}};
+    static const std::vector<ShapeCommand> none;
+    return mode == Mode::Solid ? solid : none;
+}
+
+const ToolDef& shapes_def(Mode mode) {
+    static const ToolDef sketch{ToolId::Count, "Shapes", Icon::Shapes, "", ToolGroup::Draw, true};
+    static const ToolDef solid{ToolId::Count, "Shapes", Icon::Shapes, "", ToolGroup::Create, true};
+    static const ToolDef drawing{ToolId::Count, "Shapes", Icon::Shapes, "", ToolGroup::Markup, true};
+    return mode == Mode::Solid ? solid : mode == Mode::Drawing ? drawing : sketch;
+}
+
+std::vector<const ToolDef*> toolbar_tools(Mode mode) {
+    std::vector<const ToolDef*> out;
+    bool shapes = false;
+    for (const auto* t : tools_for_mode(mode)) {
+        if (!is_shape_tool(t->id)) { out.push_back(t); continue; }
+        if (!shapes) { out.push_back(&shapes_def(mode)); shapes = true; }
+    }
+    return out;
 }
 
 const ToolDef* tool_def(ToolId id) noexcept {

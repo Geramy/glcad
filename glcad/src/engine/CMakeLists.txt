@@ -21,6 +21,20 @@ else()
   message(STATUS "gio: no TLS library found; tls:// will report that it is unavailable")
 endif()
 target_compile_features(gio PUBLIC cxx_std_20)
+if(APPLE)
+  if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(_gio_tls_network_default ON)
+  else()
+    set(_gio_tls_network_default OFF)
+  endif()
+  option(GLCAD_TLS_NETWORK "Use Network.framework for outgoing TLS" ${_gio_tls_network_default})
+  target_sources(gio PRIVATE tls_network.cpp)
+  target_link_libraries(gio PUBLIC "-framework Network" "-framework Security" "-framework CoreFoundation")
+  if(GLCAD_TLS_NETWORK)
+    target_compile_definitions(gio PRIVATE GLCAD_TLS_NETWORK)
+    message(STATUS "gio: outgoing TLS via Network.framework")
+  endif()
+endif()
 
 add_executable(gio_tests
   ${CMAKE_SOURCE_DIR}/glcad/src/math/tests/main.cpp
@@ -29,6 +43,9 @@ add_executable(gio_tests
   tests/test_session.cpp
   tests/test_tls.cpp)
 target_link_libraries(gio_tests PRIVATE gio)
+if(APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+  target_compile_definitions(gio_tests PRIVATE GLCAD_TEST_TLS_NETWORK)
+endif()
 target_include_directories(gio_tests PRIVATE ${CMAKE_SOURCE_DIR}/glcad/src/math/tests)
 glcad_add_tiered_test(gio_tests)
 # Loopback TLS handshakes flake when run in parallel; run them serially.

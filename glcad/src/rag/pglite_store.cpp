@@ -17,6 +17,10 @@
 
 extern "C" {
 #include "pglite_native.h"
+extern char my_exec_path[];
+#ifdef GLCAD_PGLITE_STATIC_EXTS
+void glcad_pgl_register_static_exts(void);
+#endif
 }
 
 namespace grag {
@@ -227,6 +231,14 @@ private:
 #endif
             }
         }
+
+#ifdef GLCAD_PGLITE_STATIC_EXTS
+        glcad_pgl_register_static_exts();
+#endif
+        // Without a bundled executable the backend cannot discover its own path.
+        const std::string exe = runtime + "/bin/postgres";
+        if (!fs::exists(exe) && !fs::exists(exe + ".exe"))
+            std::snprintf(my_exec_path, 1024, "%s", exe.c_str());
 
         pgl_native_setup();
 #ifdef _WIN32

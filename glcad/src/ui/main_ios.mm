@@ -17,6 +17,11 @@
 #include "ui/native_accessibility.hpp"
 #include "ui/product.hpp"
 #include "ui/scenario.hpp"
+#ifdef GLCAD_WITH_PGLITE
+#include "rag/library.hpp"
+#include "engine/tls.hpp"
+#include "ai/client.hpp"
+#endif
 
 using namespace gcapp;
 
@@ -48,6 +53,11 @@ gcm::u64 id_for(UITouch* t) {
     const gcm::u64 id = g_next_id++;
     g_ids[key] = id;
     return id;
+}
+
+bool is_pointer(UITouch* t) {
+    if (@available(iOS 13.4, *)) return t.type == UITouchTypeIndirectPointer;
+    return false;
 }
 
 TouchKind kind_of(UITouch* t) {
@@ -96,10 +106,53 @@ static const double kPadTextBoost = 1.65;
         [[UIHoverGestureRecognizer alloc] initWithTarget:self
                                                   action:@selector(hovered:)];
     [self addGestureRecognizer:hover];
+    if (@available(iOS 13.4, *)) {
+        UIPanGestureRecognizer* trackpad =
+            [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(trackpadScrolled:)];
+        trackpad.allowedScrollTypesMask = UIScrollTypeMaskContinuous;
+        trackpad.allowedTouchTypes = @[];
+        trackpad.cancelsTouchesInView = NO;
+        [self addGestureRecognizer:trackpad];
+        UIPanGestureRecognizer* wheel =
+            [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(wheelScrolled:)];
+        wheel.allowedScrollTypesMask = UIScrollTypeMaskDiscrete;
+        wheel.allowedTouchTypes = @[];
+        wheel.cancelsTouchesInView = NO;
+        [self addGestureRecognizer:wheel];
+        UIPinchGestureRecognizer* pinch =
+            [[UIPinchGestureRecognizer alloc] initWithTarget:self action:@selector(trackpadPinched:)];
+        pinch.allowedTouchTypes = @[ @(UITouchTypeIndirectPointer) ];
+        pinch.cancelsTouchesInView = NO;
+        [self addGestureRecognizer:pinch];
+    }
     CAMetalLayer* l = (CAMetalLayer*)self.layer;
     l.pixelFormat = MTLPixelFormatBGRA8Unorm;
     l.framebufferOnly = YES;
     return self;
+}
+
+- (void)scrollFrom:(UIPanGestureRecognizer*)g precise:(bool)precise {
+    want_frames();
+    if (!g_shell) return;
+    const CGFloat s = self.contentScaleFactor;
+    const CGPoint at = [g locationInView:self];
+    const CGPoint d = [g translationInView:self];
+    [g setTranslation:CGPointZero inView:self];
+    g_shell->pointer_move(at.x * s, at.y * s);
+    if (precise || d.y != 0.0) g_shell->scroll(d.x * s, d.y * s, precise);
+}
+- (void)trackpadScrolled:(UIPanGestureRecognizer*)g { [self scrollFrom:g precise:true]; }
+- (void)wheelScrolled:(UIPanGestureRecognizer*)g { [self scrollFrom:g precise:false]; }
+
+- (void)trackpadPinched:(UIPinchGestureRecognizer*)g {
+    want_frames();
+    if (!g_shell) return;
+    if (g.state != UIGestureRecognizerStateBegan && g.state != UIGestureRecognizerStateChanged) return;
+    const CGFloat s = self.contentScaleFactor;
+    const CGPoint at = [g locationInView:self];
+    const double mag = g.scale - 1.0;
+    g.scale = 1.0;
+    g_shell->pinch(at.x * s, at.y * s, mag);
 }
 
 - (void)hovered:(UIHoverGestureRecognizer*)g {
@@ -130,12 +183,41 @@ static const double kPadTextBoost = 1.65;
 }
 
 - (void)deliver:(NSSet<UITouch*>*)changed withEvent:(UIEvent*)event {
-    (void)changed;
     want_frames();
     std::vector<TouchPoint> points;
     const CGFloat s = self.contentScaleFactor;
 
+    bool direct = false;
+    for (UITouch* t in changed) {
+        if (!is_pointer(t) || !g_shell) continue;
+        const CGPoint p = [t locationInView:self];
+        bool secondary = false;
+        if (@available(iOS 13.4, *)) {
+            const UIKeyModifierFlags f = event.modifierFlags;
+            g_shell->set_modifiers(f & UIKeyModifierShift, f & UIKeyModifierControl,
+                                   f & UIKeyModifierAlternate, f & UIKeyModifierCommand);
+            secondary = (event.buttonMask & UIEventButtonMaskSecondary) != 0;
+        }
+        switch (t.phase) {
+            case UITouchPhaseBegan:
+                if (!secondary) request_field_at(p.x * s, p.y * s);
+                g_shell->pointer_input(Shell::PointerPhase::Down, p.x * s, p.y * s, secondary);
+                break;
+            case UITouchPhaseMoved:
+                g_shell->pointer_input(Shell::PointerPhase::Move, p.x * s, p.y * s, secondary);
+                break;
+            case UITouchPhaseEnded:
+            case UITouchPhaseCancelled:
+                g_shell->pointer_input(Shell::PointerPhase::Up, p.x * s, p.y * s, secondary);
+                break;
+            default:
+                break;
+        }
+    }
+
     for (UITouch* t in [event touchesForView:self]) {
+        if (is_pointer(t)) continue;
+        direct = true;
         if (t.phase == UITouchPhaseEnded || t.phase == UITouchPhaseCancelled)
             continue;
         const CGPoint p = [t locationInView:self];
@@ -150,62 +232,15 @@ static const double kPadTextBoost = 1.65;
         points.push_back(tp);
     }
 
+    if (!direct && g_touch.active() == 0) return;
     const double now = CACurrentMediaTime();
+    g_touch.settings.scale = s;
     const TouchResult r = g_touch.update(points, now);
     if (!g_shell) return;
 
-    switch (r.gesture) {
-        case Gesture::Press:
-            g_shell->pointer_move(r.x, r.y);
-            break;
-
-        case Gesture::Tap:
-            request_field_at(r.from_pencil ? r.x : r.raw_x, r.from_pencil ? r.y : r.raw_y);
-            if (r.from_pencil) {
-                g_shell->pointer_move(r.x, r.y);
-                g_shell->pointer_down(r.x, r.y);
-                g_shell->pointer_up(r.x, r.y);
-            } else {
-                g_shell->finger_tap(r.raw_x, r.raw_y);
-            }
-            break;
-
-        case Gesture::Drag:
-            if (r.from_pencil) {
-                if (r.began) g_shell->pointer_down(r.x, r.y);
-                g_shell->pointer_move(r.x, r.y);
-                if (r.ended) g_shell->pencil_release(r.x, r.y);
-            } else {
-                if (r.began) g_shell->middle_down(r.raw_x, r.raw_y);
-                g_shell->pointer_move(r.raw_x, r.raw_y);
-                if (r.ended) g_shell->middle_up(r.raw_x, r.raw_y);
-            }
-            break;
-
-        case Gesture::Pan:
-            if (r.dx != 0.0 || r.dy != 0.0) g_shell->scroll(r.dx, r.dy, true);
-            if (std::fabs(r.scale - 1.0) > 1e-5)
-                g_shell->pinch(r.centre_x, r.centre_y, r.scale - 1.0);
-            break;
-
-        case Gesture::Zoom:
-            g_shell->pinch(r.centre_x, r.centre_y, r.scale - 1.0);
-            break;
-
-        case Gesture::LongPress:
-            g_shell->right_down(r.x, r.y);
-            g_shell->right_up(r.x, r.y);
-            break;
-
-        case Gesture::TwoFingerTap:
-            g_shell->key_special(1);      // escape
-            break;
-
-        case Gesture::Rotate:
-        case Gesture::None:
-        default:
-            break;
-    }
+    if (r.gesture == Gesture::Tap)
+        request_field_at(r.from_pencil ? r.x : r.raw_x, r.from_pencil ? r.y : r.raw_y);
+    g_shell->apply_gesture(r);
 
     if (r.ended) {
         if (g_touch.active() == 0) g_ids.clear();

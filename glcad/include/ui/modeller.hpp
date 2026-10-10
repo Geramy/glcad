@@ -2,6 +2,7 @@
 
 #include <array>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -148,7 +149,11 @@ public:
     bool apply_edge(Op op, double value);
     bool edge_applied() const noexcept { return edge_applied_; }
     double edge_value() const noexcept { return edge_value_; }
+    double edge_limit();
+    bool   edge_limit_wait(double seconds);
+    double floor_to_display(double metres) const;
     std::size_t edge_body_index() const noexcept { return edge_body_; }
+    gcm::u32 edge_halfedge() const noexcept { return edge_he_; }
     double edge_length() const;
     bool edge_midpoint(gview::Point3& out) const;
     std::vector<std::pair<gview::Point3,gview::Point3>> edge_highlight() const;
@@ -438,6 +443,14 @@ private:
     std::vector<BodyDraft>   value_preview_;
     bool edge_drafts(Op op, double value, bool replace_applied,
                      std::vector<BodyDraft>& out, std::string& error) const;
+    static bool blend_edges(const std::vector<gtopo::Body>& source, const std::vector<EdgeSelection>& edges,
+                            Op op, double value, const gcm::WorkingVolume& vol,
+                            std::vector<BodyDraft>& out, std::string& error);
+    std::string edge_limit_key() const;
+    struct EdgeLimitJob;
+    std::shared_ptr<EdgeLimitJob> edge_limit_job_;
+    std::string edge_limit_key_;
+    double edge_limit_{-1.0};
     const gtopo::Body& displayed_body(std::size_t body) const;
     bool                     value_preview_replaces_{true};
     std::string              value_error_;

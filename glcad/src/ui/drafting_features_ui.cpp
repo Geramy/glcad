@@ -244,7 +244,10 @@ void Shell::draw_canvas_options(const gui::Rect& button, const gui::Rect& row) {
     ui_ctx_.announce(id,gui::Context::Role::Button,"Drawing options",canvas_options_open_?"expanded":"collapsed",button,canvas_options_open_);
     if(canvas_options_open_||hit.hovered||hit.held) ui_ctx_.draw().round_rect(button.deflate(gui::Insets::all(2*unit)),6*unit,
         theme.get(canvas_options_open_?gtheme::token::ui_accent:gtheme::token::ui_hover));
-    gui::draw_icon(ui_ctx_,gui::Icon::Measure,button,theme.get(canvas_options_open_?gtheme::token::ui_accent_text:gtheme::token::ui_text),1.3f);
+    const auto options_ink=theme.get(canvas_options_open_?gtheme::token::ui_accent_text:gtheme::token::ui_text);
+    gui::draw_icon(ui_ctx_,gui::Icon::Options,button,options_ink,1.3f);
+    gui::draw_menu_marker(ui_ctx_,button.deflate(gui::Insets::all(2*unit)),options_ink,unit);
+    menu_markers_.push_back({"Drawing options",button});
     if(hit.clicked) canvas_options_open_=!canvas_options_open_;
     if(!canvas_options_open_) return;
     const float line=(tablet_mode_?44:34)*unit, pad=10*unit, label_w=96*unit;

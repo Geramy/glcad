@@ -4,6 +4,10 @@
 
 #include <httplib.h>
 
+#if defined(GLCAD_AI_URLSESSION)
+#include "client_apple.hpp"
+#endif
+
 namespace gai {
 
 namespace {
@@ -50,8 +54,37 @@ static httplib::Headers auth_headers(const std::string& key) {
     return h;
 }
 
+#if defined(GLCAD_AI_URLSESSION) && !defined(CPPHTTPLIB_OPENSSL_SUPPORT)
+namespace {
+
+std::vector<std::pair<std::string, std::string>> apple_headers(const std::string& key,
+                                                               const std::string& type) {
+    std::vector<std::pair<std::string, std::string>> h;
+    if (!type.empty()) h.emplace_back("Content-Type", type);
+    if (!key.empty()) h.emplace_back("Authorization", "Bearer " + key);
+    return h;
+}
+
+std::optional<Error> apple_failure(const detail::HttpReply& r) {
+    if (!r.reached) return Error{0, "could not reach the server (" + r.error + ")"};
+    if (r.status != 200) {
+        Error e;
+        e.status = r.status;
+        std::string body = r.body.substr(0, 200);
+        for (char& c : body)
+            if (static_cast<unsigned char>(c) < 0x20 && c != ' ') c = ' ';
+        e.message = "HTTP " + std::to_string(r.status) + (body.empty() ? "" : ": " + body);
+        return e;
+    }
+    if (!r.error.empty()) return Error{0, "the connection failed (" + r.error + ")"};
+    return std::nullopt;
+}
+
+}
+#endif
+
 bool Client::tls_available() noexcept {
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+#if defined(CPPHTTPLIB_OPENSSL_SUPPORT) || defined(GLCAD_AI_URLSESSION)
     return true;
 #else
     return false;
@@ -111,6 +144,17 @@ std::optional<Error> Client::tls_error() const {
 
 Result<Health> Client::health() const {
     if (const auto e = tls_error()) return {std::nullopt, *e};
+#if defined(GLCAD_AI_URLSESSION) && !defined(CPPHTTPLIB_OPENSSL_SUPPORT)
+    if (tls_) {
+        auto r = detail::apple_request(endpoint() + prefix_ + "/health", "GET",
+                                       apple_headers(api_key_, ""), "", connect_timeout_, 5, nullptr);
+        if (r.reached && r.status == 404 && prefix_ != "/")
+            r = detail::apple_request(endpoint() + "/health", "GET", apple_headers(api_key_, ""), "",
+                                      connect_timeout_, 5, nullptr);
+        if (auto e = apple_failure(r)) return {std::nullopt, *e};
+        return parse_body<Health>(r.body);
+    }
+#endif
     httplib::Client c(endpoint());
     c.set_connection_timeout(connect_timeout_);
     c.set_read_timeout(5);
@@ -124,6 +168,14 @@ Result<Health> Client::health() const {
 
 Result<ModelList> Client::models() const {
     if (const auto e = tls_error()) return {std::nullopt, *e};
+#if defined(GLCAD_AI_URLSESSION) && !defined(CPPHTTPLIB_OPENSSL_SUPPORT)
+    if (tls_) {
+        auto r = detail::apple_request(endpoint() + prefix_ + "/models", "GET",
+                                       apple_headers(api_key_, ""), "", connect_timeout_, 10, nullptr);
+        if (auto e = apple_failure(r)) return {std::nullopt, *e};
+        return parse_body<ModelList>(r.body);
+    }
+#endif
     httplib::Client c(endpoint());
     c.set_connection_timeout(connect_timeout_);
     c.set_read_timeout(10);
@@ -135,6 +187,15 @@ Result<ModelList> Client::models() const {
 
 Result<ChatResponse> Client::chat(const ChatRequest& req) const {
     if (const auto e = tls_error()) return {std::nullopt, *e};
+#if defined(GLCAD_AI_URLSESSION) && !defined(CPPHTTPLIB_OPENSSL_SUPPORT)
+    if (tls_) {
+        auto r = detail::apple_request(endpoint() + prefix_ + "/chat/completions", "POST",
+                                       apple_headers(api_key_, "application/json"), req.to_json(),
+                                       connect_timeout_, read_timeout_, nullptr);
+        if (auto e = apple_failure(r)) return {std::nullopt, *e};
+        return parse_body<ChatResponse>(r.body);
+    }
+#endif
     httplib::Client c(endpoint());
     c.set_connection_timeout(connect_timeout_);
     c.set_read_timeout(read_timeout_);
@@ -191,7 +252,7 @@ Result<Client::StreamResult> Client::chat_stream(
     hr.set_header("Content-Type", "application/json");
     if (!api_key_.empty()) hr.set_header("Authorization", "Bearer " + api_key_);
     hr.body = req.to_json();
-    hr.content_receiver = [&](const char* data, std::size_t len, std::uint64_t, std::uint64_t) {
+    const auto on_bytes = [&](const char* data, std::size_t len) -> bool {
         if (abort && abort->load()) return false;
         carry.append(data, len);
         std::size_t start = 0;
@@ -204,6 +265,21 @@ Result<Client::StreamResult> Client::chat_stream(
             }
         carry.erase(0, start);
         return true;
+    };
+#if defined(GLCAD_AI_URLSESSION) && !defined(CPPHTTPLIB_OPENSSL_SUPPORT)
+    if (tls_) {
+        const detail::Receiver receiver = on_bytes;
+        auto r = detail::apple_request(endpoint() + prefix_ + "/chat/completions", "POST",
+                                       apple_headers(api_key_, "application/json"), req.to_json(),
+                                       connect_timeout_, read_timeout_, &receiver);
+        if (auto e = apple_failure(r)) return {std::nullopt, *e};
+        if (!carry.empty()) feed_line(carry);
+        out_r.tool_calls = tools.take();
+        return {std::move(out_r), {}};
+    }
+#endif
+    hr.content_receiver = [&](const char* data, std::size_t len, std::uint64_t, std::uint64_t) {
+        return on_bytes(data, len);
     };
     httplib::Response res;
     httplib::Error err = httplib::Error::Success;
@@ -220,6 +296,15 @@ Result<Client::StreamResult> Client::chat_stream(
 
 Result<EmbeddingResponse> Client::embed(const EmbeddingRequest& req) const {
     if (const auto e = tls_error()) return {std::nullopt, *e};
+#if defined(GLCAD_AI_URLSESSION) && !defined(CPPHTTPLIB_OPENSSL_SUPPORT)
+    if (tls_) {
+        auto r = detail::apple_request(endpoint() + prefix_ + "/embeddings", "POST",
+                                       apple_headers(api_key_, "application/json"), req.to_json(),
+                                       connect_timeout_, read_timeout_, nullptr);
+        if (auto e = apple_failure(r)) return {std::nullopt, *e};
+        return parse_body<EmbeddingResponse>(r.body);
+    }
+#endif
     httplib::Client c(endpoint());
     c.set_connection_timeout(connect_timeout_);
     c.set_read_timeout(read_timeout_);
@@ -233,6 +318,15 @@ Result<EmbeddingResponse> Client::embed(const EmbeddingRequest& req) const {
 
 Result<std::vector<u8>> Client::speech(const SpeechRequest& req) const {
     if (const auto e = tls_error()) return {std::nullopt, *e};
+#if defined(GLCAD_AI_URLSESSION) && !defined(CPPHTTPLIB_OPENSSL_SUPPORT)
+    if (tls_) {
+        auto r = detail::apple_request(endpoint() + prefix_ + "/audio/speech", "POST",
+                                       apple_headers(api_key_, "application/json"), req.to_json(),
+                                       connect_timeout_, read_timeout_, nullptr);
+        if (auto e = apple_failure(r)) return {std::nullopt, *e};
+        return {std::vector<u8>(r.body.begin(), r.body.end()), {}};
+    }
+#endif
     httplib::Client c(endpoint());
     c.set_connection_timeout(connect_timeout_);
     c.set_read_timeout(read_timeout_);
@@ -258,10 +352,23 @@ Result<std::size_t> Client::speech_stream(
     hr.set_header("Content-Type", "application/json");
     if (!api_key_.empty()) hr.set_header("Authorization", "Bearer " + api_key_);
     hr.body = req.to_json();
-    hr.content_receiver = [&](const char* data, std::size_t len, std::uint64_t, std::uint64_t) {
+    const auto on_bytes = [&](const char* data, std::size_t len) -> bool {
         total += len;
         if (on_audio) on_audio(reinterpret_cast<const u8*>(data), len);
         return true;
+    };
+#if defined(GLCAD_AI_URLSESSION) && !defined(CPPHTTPLIB_OPENSSL_SUPPORT)
+    if (tls_) {
+        const detail::Receiver receiver = on_bytes;
+        auto r = detail::apple_request(endpoint() + prefix_ + "/audio/speech", "POST",
+                                       apple_headers(api_key_, "application/json"), req.to_json(),
+                                       connect_timeout_, read_timeout_, &receiver);
+        if (auto e = apple_failure(r)) return {std::nullopt, *e};
+        return {total, {}};
+    }
+#endif
+    hr.content_receiver = [&](const char* data, std::size_t len, std::uint64_t, std::uint64_t) {
+        return on_bytes(data, len);
     };
     httplib::Response res;
     httplib::Error err = httplib::Error::Success;
@@ -280,6 +387,30 @@ Result<Transcription> Client::transcribe(const std::string& model,
                                          const std::string& mime,
                                          const std::string& language) const {
     if (const auto e = tls_error()) return {std::nullopt, *e};
+#if defined(GLCAD_AI_URLSESSION) && !defined(CPPHTTPLIB_OPENSSL_SUPPORT)
+    if (tls_) {
+        const std::string boundary = "----glcad" + std::to_string(audio.size()) + "x7d1";
+        std::string body;
+        const auto field = [&](const std::string& name, const std::string& value,
+                               const std::string& file, const std::string& type) {
+            body += "--" + boundary + "\r\nContent-Disposition: form-data; name=\"" + name + "\"";
+            if (!file.empty()) body += "; filename=\"" + file + "\"";
+            body += "\r\n";
+            if (!type.empty()) body += "Content-Type: " + type + "\r\n";
+            body += "\r\n" + value + "\r\n";
+        };
+        field("model", model, "", "");
+        field("response_format", "json", "", "");
+        field("file", std::string(audio.begin(), audio.end()), filename, mime);
+        if (!language.empty()) field("language", language, "", "");
+        body += "--" + boundary + "--\r\n";
+        auto r = detail::apple_request(endpoint() + prefix_ + "/audio/transcriptions", "POST",
+                                       apple_headers(api_key_, "multipart/form-data; boundary=" + boundary),
+                                       body, connect_timeout_, read_timeout_, nullptr);
+        if (auto e = apple_failure(r)) return {std::nullopt, *e};
+        return parse_body<Transcription>(r.body);
+    }
+#endif
     httplib::Client c(endpoint());
     c.set_connection_timeout(connect_timeout_);
     c.set_read_timeout(read_timeout_);
@@ -297,6 +428,15 @@ Result<Transcription> Client::transcribe(const std::string& model,
 
 Result<ImageResponse> Client::image(const ImageRequest& req) const {
     if (const auto e = tls_error()) return {std::nullopt, *e};
+#if defined(GLCAD_AI_URLSESSION) && !defined(CPPHTTPLIB_OPENSSL_SUPPORT)
+    if (tls_) {
+        auto r = detail::apple_request(endpoint() + prefix_ + "/images/generations", "POST",
+                                       apple_headers(api_key_, "application/json"), req.to_json(),
+                                       connect_timeout_, std::max(read_timeout_, 300), nullptr);
+        if (auto e = apple_failure(r)) return {std::nullopt, *e};
+        return parse_body<ImageResponse>(r.body);
+    }
+#endif
     httplib::Client c(endpoint());
     c.set_connection_timeout(connect_timeout_);
     c.set_read_timeout(std::max(read_timeout_, 300));   // diffusion is slow

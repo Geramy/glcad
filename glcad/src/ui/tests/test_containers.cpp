@@ -556,32 +556,39 @@ TEST(gui_every_icon_has_a_symbol) {
     CHECK(icon_codepoint(Icon::None) == 0);
 }
 
+static bool drawn_as_vector(Icon i) {
+    switch (i) {
+        case Icon::Radius: case Icon::Angle: case Icon::Cylinder: case Icon::Sphere:
+        case Icon::EllipseShape: case Icon::Draft: case Icon::Slice: return true;
+        default: return false;
+    }
+}
+
 TEST(gui_icon_codepoints_are_private_use_and_unique) {
     std::vector<u32> seen;
-    for (u16 v = 1; v <= static_cast<u16>(Icon::CallEnd); ++v) {
-        const u32 cp = icon_codepoint(static_cast<Icon>(v));
-        CHECK_MSG(cp >= 0xE000u && cp <= 0xF8FFu,
-                  "%s maps to U+%04X, outside the private use area",
-                  icon_name(static_cast<Icon>(v)), cp);
+    for (u16 v = 1; v <= static_cast<u16>(Icon::Options); ++v) {
+        const Icon i = static_cast<Icon>(v);
+        const u32 cp = icon_codepoint(i);
+        if (drawn_as_vector(i)) { CHECK_MSG(cp == 0, "icon %u is listed as vector but has a glyph", v); continue; }
+        CHECK_MSG(cp >= 0xE000u && cp <= 0xF8FFu, "icon %u maps to U+%04X, outside the private use area", v, cp);
         seen.push_back(cp);
     }
     std::sort(seen.begin(), seen.end());
     for (std::size_t i = 1; i < seen.size(); ++i)
         CHECK_MSG(seen[i] != seen[i - 1], "two icons share U+%04X", seen[i]);
-    CHECK(seen.size() == static_cast<std::size_t>(Icon::CallEnd));
 }
 
 TEST(gui_icon_codepoint_list_matches_the_enum) {
     const auto& all = icon_codepoints();
-    CHECK_MSG(all.size() == static_cast<std::size_t>(Icon::CallEnd),
-              "the atlas gets %zu codepoints for %u icons", all.size(),
-              static_cast<unsigned>(Icon::CallEnd));
-    for (u16 v = 1; v <= static_cast<u16>(Icon::CallEnd); ++v) {
-        const u32 cp = icon_codepoint(static_cast<Icon>(v));
-        CHECK_MSG(std::find(all.begin(), all.end(), cp) != all.end(),
-                  "%s is drawable but not in the atlas list",
-                  icon_name(static_cast<Icon>(v)));
+    std::size_t glyphs = 0;
+    for (u16 v = 1; v <= static_cast<u16>(Icon::Options); ++v) {
+        const Icon i = static_cast<Icon>(v);
+        if (drawn_as_vector(i)) continue;
+        ++glyphs;
+        CHECK_MSG(std::find(all.begin(), all.end(), icon_codepoint(i)) != all.end(),
+                  "icon %u is drawable but not in the atlas list", v);
     }
+    CHECK_MSG(all.size() == glyphs, "the atlas gets %zu codepoints for %zu glyph icons", all.size(), glyphs);
 }
 
 TEST(gui_icon_utf8_round_trips) {

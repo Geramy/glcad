@@ -259,6 +259,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
   if(GLCAD_WITH_PGLITE)
     # chdir, not WORKING_DIRECTORY: Xcode escapes $(...) in WORKING_DIRECTORY.
     add_custom_command(TARGET glcad POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E remove_directory
+              "$<TARGET_BUNDLE_CONTENT_DIR:glcad>/pglite"
       COMMAND ${CMAKE_COMMAND} -E make_directory
               "$<TARGET_BUNDLE_CONTENT_DIR:glcad>/pglite"
       COMMAND ${CMAKE_COMMAND} -E chdir

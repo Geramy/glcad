@@ -7,6 +7,9 @@
 #endif
 
 #include "engine/tcp.hpp"
+#if defined(GLCAD_TLS_NETWORK)
+#include "tls_network.hpp"
+#endif
 
 #if defined(GLCAD_HAVE_OPENSSL)
 #include <openssl/err.h>
@@ -16,7 +19,50 @@
 
 namespace gio {
 
-#if !defined(GLCAD_HAVE_OPENSSL)
+#if !defined(GLCAD_HAVE_OPENSSL) && defined(GLCAD_TLS_NETWORK)
+
+bool tls_available() noexcept { return true; }
+const char* tls_backend() noexcept { return "Network.framework"; }
+
+struct TlsTransport::Impl {
+    double timeout{0.0};
+};
+
+TlsTransport::TlsTransport(TlsConfig config)
+    : impl_(std::make_unique<Impl>()), config_(std::move(config)) {}
+TlsTransport::~TlsTransport() = default;
+
+std::unique_ptr<Connection> TlsTransport::connect(const Endpoint& e, Mode,
+                                                  Status& s) {
+    tls_error_.clear();
+    if (e.family != Family::Tls) {
+        s = Status::fail("the tls transport only serves tls:// endpoints");
+        return nullptr;
+    }
+    return detail::network_tls_connect(config_, e, impl_->timeout, s, tls_error_);
+}
+bool TlsTransport::listen(const Endpoint&, Status& s) {
+    s = Status::fail("a TLS server is not available on this platform");
+    return false;
+}
+std::unique_ptr<Connection> TlsTransport::accept(Status& s) {
+    s = Status::fail("a TLS server is not available on this platform");
+    return nullptr;
+}
+void   TlsTransport::set_timeout(double seconds) noexcept { impl_->timeout = seconds; }
+double TlsTransport::timeout() const noexcept { return impl_->timeout; }
+bool   TlsTransport::listening() const noexcept { return false; }
+Endpoint TlsTransport::bound() const noexcept { return {}; }
+void   TlsTransport::close_listener() {}
+
+bool register_tls_transport(TlsConfig config) {
+    auto& reg = TransportRegistry::instance();
+    if (reg.find(Family::Tls)) return false;
+    reg.add(std::make_unique<TlsTransport>(std::move(config)));
+    return true;
+}
+
+#elif !defined(GLCAD_HAVE_OPENSSL)
 
 bool tls_available() noexcept { return false; }
 const char* tls_backend() noexcept { return "none"; }
@@ -309,6 +355,9 @@ std::unique_ptr<Connection> TlsTransport::connect(const Endpoint& e, Mode m,
         s = Status::fail("the tls transport only serves tls:// endpoints");
         return nullptr;
     }
+#if defined(GLCAD_TLS_NETWORK)
+    return detail::network_tls_connect(config_, e, impl_->tcp.timeout(), s, tls_error_);
+#endif
 
     if (!impl_->client) {
         impl_->client = SSL_CTX_new(TLS_client_method());

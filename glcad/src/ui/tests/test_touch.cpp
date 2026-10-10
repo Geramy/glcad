@@ -302,3 +302,29 @@ TEST(touch_a_second_finger_ends_the_drag_it_interrupts) {
               "the interrupted drag reported '%s' ended=%d", gesture_name(r.gesture), int(r.ended));
     CHECK_MSG(!r.from_pencil, "whose drag was it?");
 }
+
+TEST(touch_finger_taps_tolerate_finger_wobble_and_hold_in_points) {
+    TouchState t;
+    t.settings.scale = 2.0;
+    t.update({finger(1, 100, 100)}, 0.0);
+    t.update({finger(1, 130, 110)}, 0.15);
+    const TouchResult up = t.update({}, 0.35);
+    CHECK_MSG(up.gesture == Gesture::Tap, "a 16 pt, 0.35 s finger tap was %s", gesture_name(up.gesture));
+
+    TouchState p;
+    p.settings.scale = 2.0;
+    p.update({pencil(1, 100, 100)}, 0.0);
+    CHECK(p.update({pencil(1, 130, 110)}, 0.05).gesture == Gesture::Drag);
+}
+
+TEST(touch_thresholds_follow_the_points_scale) {
+    TouchState t;
+    t.settings.scale = 2.0;
+    t.update({finger(1, 100, 100)}, 0.0);
+    CHECK(t.update({finger(1, 135, 100)}, 0.05).gesture == Gesture::Press);
+    CHECK(t.update({finger(1, 139, 100)}, 0.10).gesture == Gesture::Press);
+    CHECK(t.update({finger(1, 145, 100)}, 0.14).gesture == Gesture::Drag);
+    double x, y;
+    t.cursor_for(100, 100, TouchKind::Finger, x, y);
+    CHECK(std::fabs(x - (100 + t.settings.finger_offset_x * 2.0)) < 1e-9);
+}

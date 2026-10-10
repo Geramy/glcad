@@ -18,6 +18,7 @@ namespace {
 }
 
 int main(int argc, char** argv) {
+    std::string round_edge;
     int width = 2400, height = 1500;
     double dpr = 2.0;
     std::string path = "ui.png";
@@ -27,6 +28,7 @@ int main(int argc, char** argv) {
     double solid = 0.0;
     bool drawing = false;
     bool tablet = false;
+    std::string mode_name;
     std::vector<std::pair<double, double>> clicks;
     std::string import_path;
     std::vector<std::string> commands;
@@ -45,11 +47,13 @@ int main(int argc, char** argv) {
         else if (a == "--solid" && i + 1 < argc) solid = std::atof(argv[++i]);
         else if (a == "--drawing") drawing = true;
         else if (a == "--tablet") tablet = true;
+        else if (a == "--mode" && i + 1 < argc) mode_name = argv[++i];
         else if (a == "--lift" && i + 1 < argc) lift = std::atof(argv[++i]);
         else if (a == "--command" && i+1<argc) commands.push_back(argv[++i]);
         else if (a == "--symbol-legend") symbol_legend = true;
         else if (a == "--import" && i + 1 < argc) import_path = argv[++i];
         else if (a == "--wheel" && i + 1 < argc) wheel = std::atoi(argv[++i]);
+        else if (a == "--round-edge" && i + 1 < argc) round_edge = argv[++i];
         else if (a == "--click" && i + 1 < argc) {
             double cx = 0, cy = 0;
             if (std::sscanf(argv[++i], "%lf,%lf", &cx, &cy) == 2) clicks.push_back({cx, cy});
@@ -183,6 +187,23 @@ int main(int argc, char** argv) {
         shell.pointer_move(px, py);
     }
 
+    if (!round_edge.empty()) {
+        double ex = 0, ey = 0, ez = 0;
+        std::sscanf(round_edge.c_str(), "%lf,%lf,%lf", &ex, &ey, &ez);
+        shell.set_mode(Mode::Solid);
+        shell.build_frame();
+        shell.activate_tool(ToolId::FilletEdge);
+        shell.build_frame();
+        double px, py;
+        shell.camera().project(gview::Point3::from(ex, ey, ez), px, py);
+        shell.pencil_tap(px, py);
+        shell.modeller().edge_limit_wait(10);
+        shell.build_frame();
+        const double limit = shell.modeller().edge_limit();
+        if (limit > 0) shell.modeller().set_typed(gunit::format_length(shell.modeller().floor_to_display(limit * .35), gunit::Format{shell.canvas().display_unit()}));
+        shell.build_frame();
+    }
+
     if (extrude != 0.0) {
         shell.build_frame();
         shell.modeller().arm(Modeller::Op::Extrude);
@@ -243,6 +264,9 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "\n");
         }
     }
+    if (mode_name == "solid") shell.set_mode(Mode::Solid);
+    else if (mode_name == "drawing") shell.set_mode(Mode::Drawing);
+    else if (mode_name == "sketch") shell.set_mode(Mode::Sketch);
     replay_clicks();
     if (fake_call) {
         shell.command("ASSISTANT");

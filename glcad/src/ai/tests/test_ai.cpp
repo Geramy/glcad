@@ -318,3 +318,23 @@ TEST(ai_a_saved_model_pick_is_checked_against_the_server) {
     CHECK(!gai::has_model(list.data, "whisper-large"));
     CHECK(!gai::has_model(list.data, ""));
 }
+
+#if defined(__APPLE__) && defined(GLCAD_AI_URLSESSION)
+#include <cstdlib>
+#include "../client_apple.hpp"
+
+TEST(ai_apple_https_reaches_a_public_server) {
+    if (!std::getenv("GLCAD_NETWORK_TESTS")) return;
+    std::string streamed;
+    const gai::detail::Receiver keep = [&](const char* d, std::size_t n) {
+        streamed.append(d, n);
+        return true;
+    };
+    const auto r = gai::detail::apple_request("https://www.apple.com/", "GET", {}, "", 10, 20, &keep);
+    CHECK_MSG(r.reached, "%s", r.error.c_str());
+    CHECK_MSG(r.status == 200, "status %d", r.status);
+    CHECK_MSG(!streamed.empty(), "no bytes streamed");
+    const auto bad = gai::detail::apple_request("https://expired.badssl.com/", "GET", {}, "", 10, 20, nullptr);
+    CHECK_MSG(!bad.reached || !bad.error.empty(), "an expired certificate was accepted");
+}
+#endif

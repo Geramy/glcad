@@ -52,6 +52,13 @@ struct ToolGroupDef {
 };
 
 const std::vector<ToolDef>&      tool_defs();
+std::vector<const ToolDef*>      tools_for_mode(Mode mode);
+struct ShapeCommand { const char* label; const char* command; };
+bool                             is_shape_tool(ToolId id) noexcept;
+std::vector<const ToolDef*>      shape_tools(Mode mode);
+const std::vector<ShapeCommand>& shape_commands(Mode mode);
+const ToolDef&                   shapes_def(Mode mode);
+std::vector<const ToolDef*>      toolbar_tools(Mode mode);
 const std::vector<ToolGroupDef>& tool_groups();
 const ToolDef*                   tool_def(ToolId id) noexcept;
 Mode                             tool_mode(ToolId id) noexcept;

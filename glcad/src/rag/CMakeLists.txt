@@ -69,6 +69,9 @@ if(GLCAD_WITH_PGLITE)
   target_compile_definitions(grag PRIVATE
     GLCAD_PGLITE_RUNTIME_DIR="${GLCAD_PGLITE_OUT}/install")
   target_include_directories(grag PRIVATE ${GLCAD_PGLITE_SRC}/native)
+  if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    target_compile_definitions(grag PRIVATE GLCAD_PGLITE_STATIC_EXTS)
+  endif()
   add_dependencies(grag pglite_engine)
   if(WIN32)
     # The mingw engine has no zlib; the win32 backend links ws2_32 and secur32.

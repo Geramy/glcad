@@ -20,6 +20,8 @@ enum class Icon : u16 {
     Chamfer, Split, Section, Pattern, NewSketch, Finish, Measure, DeleteBody,
     Assistant, Call, Mic, Send, Attach, CallEnd,
     CheckPlan,
+    Cursor, Polygon, Stretch, BreakLine, PolarArray, Group, Radius, Diameter, Angle,
+    Cylinder, Sphere, Hole, PushPull, Draft, EllipseShape, Slice, Shapes, Options,
 };
 
 u32 icon_codepoint(Icon i) noexcept;
@@ -31,5 +33,7 @@ void draw_icon(Context& c, Icon icon, const Rect& r, Color color,
                f32 weight = 1.6f);
 
 const char* icon_name(Icon i) noexcept;
+
+void draw_menu_marker(Context& c, const Rect& button, Color color, f32 unit);
 
 }

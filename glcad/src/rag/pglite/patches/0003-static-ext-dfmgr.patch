@@ -1,0 +1,80 @@
+diff --git a/src/backend/utils/fmgr/dfmgr.c b/src/backend/utils/fmgr/dfmgr.c
+index 092004d..632e9a4 100644
+--- a/src/backend/utils/fmgr/dfmgr.c
++++ b/src/backend/utils/fmgr/dfmgr.c
+@@ -37,6 +37,58 @@
+ #include "storage/shmem.h"
+ #include "utils/hsearch.h"
+ 
++#ifdef PGL_STATIC_EXTS
++__attribute__((weak)) void *
++pgl_ext_dlopen(const char *file)
++{
++	(void) file;
++	return NULL;
++}
++
++__attribute__((weak)) void *
++pgl_ext_dlsym(void *handle, const char *symbol)
++{
++	(void) handle;
++	(void) symbol;
++	return NULL;
++}
++
++__attribute__((weak)) int
++pgl_ext_dlclose(void *handle)
++{
++	(void) handle;
++	return 0;
++}
++
++static void *
++pgl_dfmgr_dlopen(const char *file, int mode)
++{
++	void	   *handle = pgl_ext_dlopen(file);
++
++	return handle ? handle : dlopen(file, mode);
++}
++
++static void *
++pgl_dfmgr_dlsym(void *handle, const char *symbol)
++{
++	if (pgl_ext_dlclose(handle))
++		return pgl_ext_dlsym(handle, symbol);
++	return dlsym(handle, symbol);
++}
++
++static int
++pgl_dfmgr_dlclose(void *handle)
++{
++	if (pgl_ext_dlclose(handle))
++		return 0;
++	return dlclose(handle);
++}
++
++#define dlopen(file, mode) pgl_dfmgr_dlopen(file, mode)
++#define dlsym(handle, symbol) pgl_dfmgr_dlsym(handle, symbol)
++#define dlclose(handle) pgl_dfmgr_dlclose(handle)
++#endif
++
+ 
+ /* signature for PostgreSQL-specific library init function */
+ typedef void (*PG_init_t) (void);
+@@ -203,6 +255,16 @@ internal_load_library(const char *libname)
+ 		/*
+ 		 * Check for same files - different paths (ie, symlink or link)
+ 		 */
++#ifdef PGL_STATIC_EXTS
++		void	   *static_ext = pgl_ext_dlopen(libname);
++
++		if (static_ext)
++		{
++			memset(&stat_buf, 0, sizeof(stat_buf));
++			stat_buf.st_ino = (ino_t) (uintptr_t) static_ext;
++		}
++		else
++#endif
+ 		if (stat(libname, &stat_buf) == -1)
+ 			ereport(ERROR,
+ 					(errcode_for_file_access(),

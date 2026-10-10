@@ -68,6 +68,55 @@
     [fm removeItemAtURL:source error:nil];
     NSString* recovered = copied ? [NSString stringWithContentsOfURL:copied encoding:NSUTF8StringEncoding error:nil] : nil;
     check(@"Files copy survives source deletion", [recovered isEqualToString:@"durable source"]);
+#ifdef GLCAD_WITH_PGLITE
+    {
+        NSString* pgdir = [NSTemporaryDirectory() stringByAppendingPathComponent:@"native-smoke-pglite"];
+        [fm removeItemAtPath:pgdir error:nil];
+        grag::Library lib(pgdir.fileSystemRepresentation, grag::Backend::Postgres);
+        check(@"embedded Postgres opens without the sidecar fallback", lib.backend() == grag::Backend::Postgres);
+        const grag::Embedder embed = [](const std::vector<std::string>& texts) {
+            std::vector<std::vector<float>> out;
+            for (std::string t : texts) {
+                for (char& c : t) c = char(std::tolower(static_cast<unsigned char>(c)));
+                out.push_back({t.find("wall") != std::string::npos ? 1.0f : 0.0f,
+                               t.find("roof") != std::string::npos ? 1.0f : 0.0f, 0.1f});
+            }
+            return out;
+        };
+        lib.save("Walls", "Exterior walls are 200 mm thick.", "smoke");
+        lib.save("Roofs", "Roof pitch is 30 degrees.", "smoke");
+        bool embedded = false;
+        const bool indexed = lib.ensure_indexed("smoke-model", embed);
+        const auto hits = lib.lookup("wall thickness", 1, "smoke-model", embed, &embedded);
+        check(@"pgvector similarity search runs in the app",
+              lib.backend() == grag::Backend::Postgres && indexed && embedded &&
+              !hits.empty() && hits[0].text.find("200 mm") != std::string::npos);
+    }
+#endif
+    {
+        gio::TlsTransport tls;
+        tls.set_timeout(15.0);
+        gio::Status ts;
+        auto conn = tls.connect(gio::Endpoint::tls("www.apple.com", 443), gio::Mode::ReadWrite, ts);
+        std::string head;
+        if (conn) {
+            const std::string req = "GET / HTTP/1.1\r\nHost: www.apple.com\r\nConnection: close\r\n\r\n";
+            conn->output()->write(reinterpret_cast<const gcm::u8*>(req.data()), req.size());
+            gcm::u8 buf[64];
+            const std::size_t n = conn->input()->read(buf, sizeof buf);
+            head.assign(reinterpret_cast<const char*>(buf), n);
+            conn->close();
+        }
+        check(@"https over the system TLS stack reaches a public server",
+              gio::tls_available() && head.rfind("HTTP/1.1", 0) == 0);
+        const auto client = gai::Client::from_url("https://www.apple.com");
+        const auto health = client ? client->health() : gai::Result<gai::Health>{};
+        const bool reached = health.value.has_value() ||
+            (health.error.message.find("could not reach") == std::string::npos &&
+             health.error.message.find("cannot open https") == std::string::npos &&
+             !health.error.message.empty());
+        check(@"the assistant client opens https servers", gai::Client::tls_available() && reached);
+    }
     auto cancelled = std::make_shared<bool>(false);
     [self askFile:Shell::FileAsk::Import completion:[cancelled](std::string path) { *cancelled = path.empty(); }];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_main_queue(), ^{

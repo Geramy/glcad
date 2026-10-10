@@ -2,6 +2,10 @@
 #include "ui/modeller.hpp"
 
 #include <unordered_map>
+#include <atomic>
+#include <chrono>
+#include <thread>
+#include "math/thread.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -1152,10 +1156,16 @@ bool Modeller::edge_midpoint(gview::Point3& out) const {
 
 bool Modeller::edge_drafts(Op op, double value, bool replace_applied,
                            std::vector<BodyDraft>& out, std::string& error) const {
-    out.clear();error.clear();
     const auto& source=replace_applied && !undo_.empty() ? undo_.back().bodies : bodies_;
+    return blend_edges(source,selected_edges_,op,value,vol_,out,error);
+}
+
+bool Modeller::blend_edges(const std::vector<gtopo::Body>& source, const std::vector<EdgeSelection>& edges,
+                           Op op, double value, const gcm::WorkingVolume& vol,
+                           std::vector<BodyDraft>& out, std::string& error) {
+    out.clear();error.clear();
     std::vector<BodyDraft> drafts;
-    for(const auto& edge:selected_edges_) {
+    for(const auto& edge:edges) {
         if(edge.body>=source.size()) {error="a selected solid no longer exists; no edges changed";return false;}
         auto draft=std::find_if(drafts.begin(),drafts.end(),[&](const BodyDraft& d) {return d.body==edge.body;});
         if(draft==drafts.end()) {
@@ -1165,18 +1175,18 @@ bool Modeller::edge_drafts(Op op, double value, bool replace_applied,
         auto& body=draft->shape;
         const auto mid=(v3(edge.a)+v3(edge.b))*.5;
         gcm::u32 he=gtopo::kInvalid;
-        const double tolerance=vol_.inv_scale()*8;
+        const double tolerance=vol.inv_scale()*8;
         for(gcm::u32 h=0;h<body.halfedge_count();++h) {
             double ax,ay,az,bx,by,bz;
-            gcm::to_world(vol_,body.vertex_point[body.he_vertex[h]],ax,ay,az);
-            gcm::to_world(vol_,body.vertex_point[body.he_vertex[body.he_next[h]]],bx,by,bz);
+            gcm::to_world(vol,body.vertex_point[body.he_vertex[h]],ax,ay,az);
+            gcm::to_world(vol,body.vertex_point[body.he_vertex[body.he_next[h]]],bx,by,bz);
             const V3 a{ax,ay,az},b{bx,by,bz},d=b-a;
             const double l2=dot(d,d),u=l2>0 ? dot(mid-a,d)/l2 : -1;
             if(u>=0 && u<=1 && len(mid-(a+d*u))<=tolerance) {he=h;break;}
         }
         if(he==gtopo::kInvalid) {error="a selected edge no longer exists; no edges changed";return false;}
-        auto result=op==Op::FilletEdge ? gtopo::fillet_edge_exact(body,he,value,12,vol_)
-                                    : gtopo::chamfer_edge(body,he,value,value,vol_);
+        auto result=op==Op::FilletEdge ? gtopo::fillet_edge_exact(body,he,value,12,vol)
+                                    : gtopo::chamfer_edge(body,he,value,value,vol);
         if(!result.ok) {
             error=(result.reason.empty() ? "could not blend a selected edge" : result.reason)+"; no edges changed";
             return false;
@@ -1185,6 +1195,109 @@ bool Modeller::edge_drafts(Op op, double value, bool replace_applied,
     }
     out=std::move(drafts);
     return !out.empty();
+}
+
+struct Modeller::EdgeLimitJob {
+    std::atomic<bool> done{false};
+    double result{0.0};
+    gcm::BigStackThread thread;
+};
+
+double Modeller::floor_to_display(double metres) const {
+    const double per=gunit::metres_per(display_unit_);
+    if (!(metres>0) || !(per>0)) return 0.0;
+    return std::floor(metres/per*1e4+1e-9)/1e4*per;
+}
+
+std::string Modeller::edge_limit_key() const {
+    if (!edge_kept() || (op_!=Op::FilletEdge && op_!=Op::ChamferEdge)) return {};
+    const bool replacing=edge_applied_ && !undo_.empty();
+    const auto& source=replacing ? undo_.back().bodies : bodies_;
+    std::string key=std::to_string(int(op_));
+    const auto add_body=[&](std::size_t b) {
+        if (b>=source.size()) { key+="|missing"; return; }
+        const auto& body=source[b];
+        gcm::u64 h=1469598103934665603ull;
+        for (const auto& p:body.vertex_point) {
+            for (const auto c:{p.x,p.y,p.z}) { h^=gcm::u64(c); h*=1099511628211ull; }
+        }
+        key+="|"+std::to_string(b)+":"+std::to_string(body.halfedge_count())+":"+std::to_string(h);
+    };
+    if (selected_edges_.size()>1) {
+        for (const auto& e:selected_edges_) {
+            add_body(e.body);
+            char buf[160];
+            std::snprintf(buf,sizeof(buf),"(%.9g,%.9g,%.9g;%.9g,%.9g,%.9g)",e.a.x.to_f64(),e.a.y.to_f64(),e.a.z.to_f64(),e.b.x.to_f64(),e.b.y.to_f64(),e.b.z.to_f64());
+            key+=buf;
+        }
+    } else {
+        add_body(edge_body_);
+        key+="#"+std::to_string(edge_he_);
+    }
+    return key;
+}
+
+double Modeller::edge_limit() {
+    const std::string key=edge_limit_key();
+    if (key.empty()) return -1.0;
+    if (key!=edge_limit_key_) {
+        edge_limit_key_=key;
+        edge_limit_=-1.0;
+        const bool replacing=edge_applied_ && !undo_.empty();
+        std::vector<gtopo::Body> source=replacing ? undo_.back().bodies : bodies_;
+        const auto edges=selected_edges_;
+        const bool single=edges.size()<=1;
+        const std::size_t body=edge_body_;
+        const gcm::u32 he=edge_he_;
+        const Op op=op_;
+        const auto vol=vol_;
+        auto job=std::make_shared<EdgeLimitJob>();
+        EdgeLimitJob* raw=job.get();
+        job->thread=gcm::BigStackThread([raw,source=std::move(source),edges,single,body,he,op,vol] {
+            const auto valid=[&](double r) {
+                if (single) {
+                    if (body>=source.size()) return false;
+                    return op==Op::FilletEdge ? gtopo::fillet_edge_exact(source[body],he,r,12,vol).ok
+                                              : gtopo::chamfer_edge(source[body],he,r,r,vol).ok;
+                }
+                std::vector<BodyDraft> out; std::string error;
+                return blend_edges(source,edges,op,r,vol,out,error);
+            };
+            double hi=0.0;
+            const auto grow=[&](std::size_t b) {
+                if (b>=source.size()) return;
+                const auto bb=source[b].bounds(vol);
+                const double dx=bb.hi.x.to_f64()-bb.lo.x.to_f64(),dy=bb.hi.y.to_f64()-bb.lo.y.to_f64(),dz=bb.hi.z.to_f64()-bb.lo.z.to_f64();
+                hi=std::max(hi,std::sqrt(dx*dx+dy*dy+dz*dz));
+            };
+            if (single) grow(body); else for (const auto& e:edges) grow(e.body);
+            double lo=0.0;
+            if (hi>0.0 && valid(hi)) lo=hi;
+            else {
+                const double eps=std::max(hi*1e-6,vol.inv_scale()*4);
+                for (int i=0;i<40 && hi-lo>eps;++i) {
+                    const double mid=(lo+hi)*.5;
+                    if (valid(mid)) lo=mid; else hi=mid;
+                }
+            }
+            raw->result=lo;
+            raw->done.store(true,std::memory_order_release);
+        });
+        edge_limit_job_=std::move(job);
+    }
+    if (edge_limit_<0.0 && edge_limit_job_ && edge_limit_job_->done.load(std::memory_order_acquire))
+        edge_limit_=floor_to_display(edge_limit_job_->result);
+    return edge_limit_;
+}
+
+bool Modeller::edge_limit_wait(double seconds) {
+    const auto start=std::chrono::steady_clock::now();
+    while (edge_limit()<0.0) {
+        if (edge_limit_key_.empty()) return false;
+        if (std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count()>seconds) return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    return true;
 }
 
 const gtopo::Body& Modeller::displayed_body(std::size_t body) const {
@@ -1750,6 +1863,26 @@ void Modeller::set_typed(std::string text) {
         return;
     }
     value_preview_replaces_=true;
+    if ((op_==Op::FilletEdge || op_==Op::ChamferEdge) && edge_valid_) {
+        const double limit=edge_limit();
+        if (limit>0.0 && *parsed>limit*(1+1e-9)) {
+            const std::string at=gunit::format_length(limit,gunit::Format{display_unit_});
+            std::string error;
+            if (selected_edges_.size()>1) edge_drafts(op_,limit,edge_applied_,value_preview_,error);
+            else if (edge_body_<bodies_.size()) {
+                const auto& source=edge_applied_ && !undo_.empty() ? undo_.back().bodies[edge_body_] : bodies_[edge_body_];
+                const auto draft=op_==Op::ChamferEdge ? gtopo::chamfer_edge(source,edge_he_,limit,limit,vol_)
+                                                      : gtopo::fillet_edge(source,edge_he_,limit,12,vol_);
+                if (draft.ok) value_preview_.push_back({edge_body_,draft.body});
+            }
+            value_error_=std::string(op_==Op::FilletEdge ? "Largest round here is " : "Largest bevel here is ")+at+"; OK applies "+at;
+            return;
+        }
+        if (limit==0.0) {
+            value_error_=op_==Op::FilletEdge ? "This edge can't be rounded" : "This edge can't be bevelled";
+            return;
+        }
+    }
     if (op_==Op::ShellBody && target_.valid && target_.body<bodies_.size()) {
         const auto draft=gtopo::shell_body(bodies_[target_.body],*parsed,{target_.face},vol_);
         if (!draft.ok) { value_error_=draft.reason; return; }
@@ -1795,8 +1928,16 @@ bool Modeller::commit_typed() {
             committed_=false;
             commit_shell(d);
         } else {
-            const bool ok=apply_edge(op_ == Op::ChamferEdge ? Op::ChamferEdge : Op::FilletEdge, d);
-            if (ok) typed_.clear();
+            const Op op=op_ == Op::ChamferEdge ? Op::ChamferEdge : Op::FilletEdge;
+            const double limit=edge_valid_ ? edge_limit() : -1.0;
+            const bool clamped=limit>0.0 && d>limit*(1+1e-9);
+            const bool ok=apply_edge(op, clamped ? limit : d);
+            if (ok) {
+                typed_.clear();
+                if (clamped) message_=std::string(op==Op::FilletEdge ? "Rounded to " : "Bevelled to ")+
+                                      gunit::format_length(limit,gunit::Format{display_unit_})+
+                                      ", the largest this edge allows";
+            }
             else { clear_preview(); value_error_=message_; }
             return ok;
         }

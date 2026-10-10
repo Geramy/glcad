@@ -109,7 +109,7 @@ TEST(tools_every_tool_has_a_group_an_icon_and_a_command) {
         bool grouped = false;
         for (const auto& g : tool_groups()) if (g.group == d.group) grouped = true;
         CHECK_MSG(grouped, "tool '%s' is in no group", d.label);
-        CHECK_MSG(gui::icon_codepoint(d.icon) != 0, "tool '%s' has no icon", d.label);
+        CHECK_MSG(d.icon != gui::Icon::None, "tool '%s' has no icon", d.label);
         CHECK_MSG(d.command[0] != '\0', "tool '%s' has no command", d.label);
     }
 }
@@ -138,10 +138,8 @@ TEST(toolbar_wrapping_keeps_every_tool_visible_without_overlapping_controls) {
             for (const auto mode : {Mode::Sketch, Mode::Solid, Mode::Drawing}) {
                 const gui::Rect area{0, 100 * scale, width * scale, 1500 * scale};
                 const auto layout = layout_toolbar(mode, area, scale);
-                std::vector<const ToolDef*> expected, actual;
-                for (const auto& group : tool_groups()) if (group.mode == mode)
-                    for (const auto& tool : tool_defs()) if (tool.group == group.group)
-                        expected.push_back(&tool);
+                std::vector<const ToolDef*> actual;
+                const auto expected = toolbar_tools(mode);
                 std::vector<gui::Rect> occupied{layout.modes, layout.settings, layout.assistant};
                 if(mode==Mode::Sketch)occupied.push_back(layout.plan_check);
                 for (const auto& fragment : layout.groups) {
@@ -905,8 +903,11 @@ TEST(workflow_right_click_object_actions_are_labeled_clamped_and_operable) {
     s.canvas().set_selection({0, 1});
     s.build_frame();
     const auto node = [&](const std::string& label) {
-        for (const auto& item : s.accessible_ui()) if (item.label == label) return item;
-        return gui::Context::Accessible{};
+        gui::Context::Accessible best{};
+        bool found = false;
+        for (const auto& item : s.accessible_ui())
+            if (item.label == label && (!found || item.depth > best.depth)) { best = item; found = true; }
+        return best;
     };
     CHECK(node("Object options").bounds.empty());
     CHECK(node("Selection actions").bounds.empty());
@@ -7134,6 +7135,37 @@ TEST(dwg_model_units_do_not_rescale_existing_geometry_or_paper) {
     double x,y; gcm::to_world(v,s.canvas().shapes()[0].a,x,y); CHECK(std::abs(x-.01)<1e-6); CHECK(std::abs(y-.02)<1e-6);
 }
 
+namespace {
+gui::Rect find_button(Shell& s, const std::string& label) {
+    gui::Rect best{};int depth=-1;
+    for(const auto& item:s.accessible_ui())
+        if(item.role==gui::Context::Role::Button&&item.label==label&&item.depth>depth) {best=item.bounds;depth=item.depth;}
+    return best;
+}
+void pointer_click(Shell& s, gui::Rect r) {
+    const auto c=r.centre();
+    s.pointer_move(c.x,c.y);s.build_frame();
+    s.pointer_down(c.x,c.y);s.build_frame();
+    s.pointer_up(c.x,c.y);s.build_frame();s.build_frame();
+}
+void finger_click(Shell& s, gui::Rect r) {
+    const auto c=r.centre();
+    s.finger_tap(c.x,c.y);s.build_frame();s.build_frame();
+}
+bool hover_highlight(Shell& s, gui::Rect r) {
+    const auto count=[&] {
+        int n=0;
+        for(const auto& item:s.ui()) if(item.rect[0]<=r.x+4&&item.rect[1]<=r.y+4&&item.rect[0]+item.rect[2]>=r.right()-4&&
+            item.rect[1]+item.rect[3]>=r.bottom()-4&&item.rect[2]<=r.w+8&&item.rect[3]<=r.h+8) ++n;
+        return n;
+    };
+    s.pointer_move(r.centre().x,r.bottom()+160);s.build_frame();s.build_frame();
+    const int away=count();
+    s.pointer_move(r.centre().x,r.centre().y);s.build_frame();s.build_frame();
+    return count()>away;
+}
+}
+
 TEST(toolbar_wrapped_buttons_and_dropdowns_work_and_resize_reclaims_canvas) {
     Shell s = make_shell();
     s.set_viewport(800, 1100);
@@ -7152,11 +7184,15 @@ TEST(toolbar_wrapped_buttons_and_dropdowns_work_and_resize_reclaims_canvas) {
                     return gui::Rect{fragment.bounds.x + 42 * float(i), fragment.bounds.y, 40, 40};
         return gui::Rect{};
     };
-    const auto rectangle = tool_button(layout, ToolId::Rect);
+    const auto shapes = tool_button(layout, ToolId::Count);
     CHECK(tool_button(layout, ToolId::Text).y > top + 72);
     CHECK(s.dock().slot("layers").frame.y >= top + layout.height);
-    click(rectangle.right() - 6, rectangle.bottom() - 6);
-    click(rectangle.x + 30, rectangle.bottom() + 4 + 28 + 14);
+    click(shapes.centre().x, shapes.centre().y);
+    const auto rect_item = find_button(s, "Rectangle");
+    CHECK(rect_item.y >= shapes.bottom());
+    click(rect_item.centre().x, rect_item.centre().y);
+    const auto centre = find_button(s, "From centre");
+    click(centre.centre().x, centre.centre().y);
     CHECK(s.canvas().tool_mode(Tool::Rect) == 1);
     CHECK(s.active_tool() == ToolId::Rect);
     CHECK(s.canvas().shapes().empty());
@@ -8673,53 +8709,42 @@ void click_value_control(Shell& s,const char* label,gui::Context::Role role) {
 }
 }
 
-TEST(workflow_toolbar_options_hover_and_open_below_their_own_tool) {
-    for (int width : {800, 2400}) {
-        for (const auto tool : {Tool::Rect, Tool::Circle, Tool::Arc}) {
-            Shell s = make_shell();
-            s.set_viewport(width, 1000);
-            s.edit_sketch(0);
-            s.activate_tool(ToolId::Select);
-            s.build_frame();
-            const char* label = tool == Tool::Rect ? "Rectangle options"
-                              : tool == Tool::Circle ? "Circle options" : "Arc options";
-            const auto arrow = value_control(s, label, gui::Context::Role::Button);
-            if (arrow.empty()) continue;
-            const auto has_highlight = [&] {
-                for (const auto& item : s.ui())
-                    if (item.params[2] == 0 && item.rect[0] == arrow.x && item.rect[1] == arrow.y &&
-                        item.rect[2] == arrow.w && item.rect[3] == arrow.h) return true;
-                return false;
-            };
-            CHECK(!has_highlight());
-            s.pointer_move(arrow.centre().x, arrow.centre().y);
-            s.build_frame(); s.build_frame();
-            CHECK(has_highlight());
-            click_value_control(s, label, gui::Context::Role::Button);
-            CHECK(s.canvas().tool() == Tool::Select);
-            const auto modes = Canvas::tool_modes(tool);
-            const auto row = value_control(s, modes[0].c_str(), gui::Context::Role::Row);
-            CHECK(row.y == arrow.bottom() + 4);
-            CHECK(row.x <= arrow.x && row.right() >= arrow.right());
-            click_value_control(s, modes[1].c_str(), gui::Context::Role::Row);
-            CHECK(s.canvas().tool() == tool);
-            CHECK(s.canvas().tool_mode(tool) == 1);
-            s.build_frame();
-            for (const auto& item : s.accessible_ui())
-                CHECK(item.role != gui::Context::Role::Row || item.label != modes[0]);
-            s.pointer_move(arrow.centre().x, arrow.centre().y);
-            s.build_frame(); s.build_frame();
-            CHECK(has_highlight());
-            click_value_control(s, label, gui::Context::Role::Button);
-            CHECK(!value_control(s, modes[0].c_str(), gui::Context::Role::Row).empty());
-            click_value_control(s, label, gui::Context::Role::Button);
-            s.build_frame();
-            for (const auto& item : s.accessible_ui())
-                if (item.label == label) CHECK(item.value == "collapsed");
+
+TEST(workflow_shape_placement_chip_works_by_pointer_and_finger) {
+    struct Case {int width;bool tablet;};
+    for (const auto c : {Case{1600,false},Case{1376,true},Case{1032,true}}) {
+        Shell s=make_shell();s.set_viewport(c.width,1100);s.set_tablet_mode(c.tablet);s.edit_sketch(0);s.build_frame();s.build_frame();
+        CHECK(find_button(s,"Two corners").empty());
+        for (const auto [id,tool] : {std::pair{ToolId::Rect,Tool::Rect},std::pair{ToolId::Circle,Tool::Circle},std::pair{ToolId::Arc,Tool::Arc}}) {
+            pointer_click(s,find_button(s,"Shapes"));
+            const auto item=find_button(s,tool_def(id)->label);
+            CHECK_MSG(!item.empty(),"%s missing from the Shapes menu",tool_def(id)->label);
+            if(c.tablet) CHECK(item.h>=44);
+            pointer_click(s,item);
+            CHECK(s.active_tool()==id);
+            const auto& modes=Canvas::tool_modes(tool);
+            for(std::size_t i=0;i<modes.size();++i) {
+                const auto seg=find_button(s,modes[i]);
+                CHECK_MSG(!seg.empty(),"%s placement option missing",modes[i].c_str());
+                if(c.tablet) CHECK(seg.h>=44);
+                CHECK(seg.y>=s.canvas_bounds().y);
+                if(i%2) finger_click(s,seg); else pointer_click(s,seg);
+                CHECK_MSG(s.canvas().tool_mode(tool)==int(i),"%s: placement %zu did not reach the tool",modes[i].c_str(),i);
+                CHECK(s.active_tool()==id);
+                CHECK(s.canvas().shapes().empty());
+            }
+            const auto first=find_button(s,modes[0]);
+            CHECK(hover_highlight(s,first));
+        }
+        s.canvas().set_tool_mode(Tool::Rect,2);
+        s.activate_tool(ToolId::Circle);s.build_frame();s.activate_tool(ToolId::Rect);s.build_frame();
+        CHECK(s.canvas().tool_mode(Tool::Rect)==2);
+        for(const auto other:{ToolId::Line,ToolId::Ellipse,ToolId::Polygon,ToolId::Select}) {
+            s.activate_tool(other);s.build_frame();s.build_frame();
+            CHECK_MSG(find_button(s,"Two corners").empty()&&find_button(s,"Centre, radius").empty(),"placement chip left up for tool %d",int(other));
         }
     }
 }
-
 TEST(workflow_clickable_extrusion_field_previews_then_commits_once) {
     for (bool enter:{true,false}) {
         Shell s=make_shell();
@@ -9290,58 +9315,54 @@ void click_tablet_popup(Shell& s,const char* label) {
 }
 
 TEST(workflow_tablet_toolbar_keeps_every_group_and_tool_reachable) {
-    for (int width : {360, 820}) for (auto mode : {Mode::Sketch, Mode::Solid, Mode::Drawing}) {
+    for (int width : {360, 820, 1032, 1376}) for (auto mode : {Mode::Sketch, Mode::Solid, Mode::Drawing}) {
         Shell s=make_shell();s.set_viewport(width,900);s.set_tablet_mode(true);s.set_mode(mode);s.build_frame();
-        const auto has=[&](const char* label) {
-            for(const auto& item:s.accessible_ui()) if(item.role==gui::Context::Role::Button&&item.label==label&&!item.disabled)return true;
-            return false;
-        };
-        const auto category=[&]() {
-            for(const auto& item:s.accessible_ui()) if(item.role==gui::Context::Role::Button&&item.label!="More tools"&&
-                item.label.size()>6&&item.label.substr(item.label.size()-6)==" tools"&&item.bounds.y<250)return item.label;
-            CHECK(false);return std::string{};
-        };
-        const auto& more=value_control(s,"More tools",gui::Context::Role::Button);
-        CHECK(more.h==44);CHECK(more.right()<=width);CHECK(more.bottom()<250);
-        for(const auto& group:tool_groups()) if(group.mode==mode) {
-            const auto name=category();click_value_control(s,name.c_str(),gui::Context::Role::Button);
-            CHECK(has(group.caption));click_tablet_popup(s,group.caption);
-            click_value_control(s,"More tools",gui::Context::Role::Button);
-            std::vector<std::string> listed;
-            for(int page=0;page<20;++page) {
-                for(const auto& item:s.accessible_ui()) if(item.role==gui::Context::Role::Button&&item.depth==1) {
-                    listed.push_back(item.label);
-                    CHECK(item.bounds.x>=0);CHECK(item.bounds.right()<=width);CHECK(item.bounds.bottom()<=900);
-                }
-                if(!has("Next tools"))break;
-                click_tablet_popup(s,"Next tools");
-            }
-            for(const auto& tool:tool_defs()) if(tool.group==group.group)
-                CHECK_MSG(std::find(listed.begin(),listed.end(),tool.label)!=listed.end(),"tablet tool inaccessible: %s",tool.label);
-            click_value_control(s,"More tools",gui::Context::Role::Button);
+        bool more=false;
+        for(const auto& item:s.accessible_ui()) if(item.label=="More tools")more=true;
+        CHECK(!more);
+        std::vector<gui::Rect> seen;
+        for(const auto* tool:toolbar_tools(mode)) {
+            const auto r=value_control(s,tool->label,gui::Context::Role::Button);
+            CHECK_MSG(!r.empty(),"width %d: tablet tool missing: %s",width,tool->label);
+            CHECK(r.h==44);CHECK(r.x>=0);CHECK(r.right()<=width+0.5f);CHECK(r.bottom()<=s.canvas_bounds().y+0.5f);
+            for(const auto& o:seen) CHECK_MSG(!r.deflate(gui::Insets::all(1)).intersects(o),"width %d: %s overlaps",width,tool->label);
+            seen.push_back(r);
         }
     }
 }
 
-TEST(workflow_tablet_options_anchor_below_arrow_after_overflow_selection) {
-    Shell s=make_shell();s.set_viewport(360,900);s.set_tablet_mode(true);s.build_frame();
-    click_value_control(s,"More tools",gui::Context::Role::Button);
-    click_value_control(s,"Circle",gui::Context::Role::Button);s.build_frame();
-    CHECK(s.active_tool()==ToolId::Circle);
-    const auto arrow=value_control(s,"Circle options",gui::Context::Role::Button);
-    CHECK(arrow.w==44);CHECK(arrow.h==44);
-    s.pointer_move(arrow.centre().x,arrow.centre().y);s.build_frame();s.build_frame();
-    bool highlighted=false;
-    for(const auto& rect:s.ui()) if(rect.params[2]==0&&rect.rect[0]==arrow.x&&rect.rect[1]==arrow.y&&rect.rect[2]==arrow.w&&rect.rect[3]==arrow.h)highlighted=true;
-    CHECK(highlighted);
-    click_value_control(s,"Circle options",gui::Context::Role::Button);
-    const auto& modes=Canvas::tool_modes(Tool::Circle);
-    const auto first=value_control(s,modes[0].c_str(),gui::Context::Role::Button);
-    CHECK(first.y==arrow.bottom()+4);
-    click_value_control(s,modes[1].c_str(),gui::Context::Role::Button);
-    CHECK(s.canvas().tool_mode(Tool::Circle)==1);
+TEST(workflow_shapes_menu_lists_every_shape_and_works_by_pointer_and_finger) {
+    struct Case {int width;bool tablet;};
+    for (const auto c : {Case{1600,false},Case{1376,true},Case{820,true}})
+    for (auto mode : {Mode::Sketch, Mode::Solid, Mode::Drawing}) {
+        Shell s=make_shell();s.set_viewport(c.width,1100);s.set_tablet_mode(c.tablet);s.set_mode(mode);s.build_frame();s.build_frame();
+        const auto button=find_button(s,"Shapes");
+        CHECK_MSG(!button.empty(),"no Shapes button (mode %d)",int(mode));
+        if(c.tablet) CHECK(button.w>=44&&button.h>=44);
+        CHECK(hover_highlight(s,button));
+        for(const auto* t:shape_tools(mode)) CHECK_MSG(find_button(s,t->label).empty()||find_button(s,t->label).y>=s.canvas_bounds().y,
+            "%s still has its own toolbar button",t->label);
+        std::vector<std::string> expected;
+        for(const auto* t:shape_tools(mode)) expected.push_back(t->label);
+        for(const auto& cmd:shape_commands(mode)) expected.push_back(cmd.label);
+        for(std::size_t i=0;i<expected.size();++i) {
+            if(c.tablet&&i%2) finger_click(s,button); else pointer_click(s,button);
+            std::vector<std::string> listed;
+            const auto column=find_button(s,expected[0]);
+            for(const auto& item:s.accessible_ui()) if(item.role==gui::Context::Role::Button&&item.depth>0&&
+                std::fabs(item.bounds.x-column.x)<0.5f&&std::fabs(item.bounds.w-column.w)<0.5f) {
+                listed.push_back(item.label);
+                if(c.tablet) CHECK(item.bounds.h>=44);
+                CHECK(item.bounds.right()<=c.width+0.5f);
+            }
+            CHECK_MSG(listed==expected,"mode %d: Shapes menu lists %zu entries, expected %zu",int(mode),listed.size(),expected.size());
+            const auto item=find_button(s,expected[i]);
+            if(c.tablet&&i%2==0) finger_click(s,item); else pointer_click(s,item);
+            if(i<shape_tools(mode).size()) CHECK_MSG(s.active_tool()==shape_tools(mode)[i]->id,"choosing %s did not activate it",expected[i].c_str());
+            s.activate_tool(ToolId::Select);s.build_frame();
+        }
+    }
 }
-
 TEST(workflow_tablet_menu_overflow_reaches_all_categories_and_entries) {
     for(bool tablet:{false,true}) {
         Shell s=make_shell();s.set_viewport(360,520);s.set_tablet_mode(tablet);s.build_frame();
@@ -9967,7 +9988,7 @@ TEST(workflow_mode_menu_switches_modes_on_desktop_and_tablet) {
     }
 }
 
-TEST(workflow_tablet_header_is_two_compact_rows_on_ipad_widths) {
+TEST(workflow_tablet_header_fits_every_tool_on_ipad_widths) {
     for (int width : {1032, 1376}) for (auto mode : {Mode::Sketch, Mode::Solid, Mode::Drawing}) {
         Shell s=make_shell();s.set_viewport(width,1300);s.set_tablet_mode(true);
         s.command("LAYOUT NEW Plan");s.select_layout(-1);s.set_mode(mode);s.build_frame();s.build_frame();
@@ -9975,29 +9996,79 @@ TEST(workflow_tablet_header_is_two_compact_rows_on_ipad_widths) {
         const float top=s.toolbar_top();
         const std::string tab_title=s.tabs()[0].title;
         CHECK_MSG(top<=44.5f,"width %d: header row %g tall",width,top);
-        CHECK_MSG(s.canvas_bounds().y<=100,"width %d mode %d: %g pt of chrome above the canvas",width,int(mode),s.canvas_bounds().y);
         const std::string document="Document: "+tab_title;
         const std::string layout=std::string("Layout: ")+(s.selected_layout()<0?"Model":s.layouts()[std::size_t(s.selected_layout())].name);
         for (const char* label : {"Settings","Assistant panel","Drawing options",document.c_str(),layout.c_str()}) {
             const auto r=value_control(s,label,gui::Context::Role::Button);
             CHECK_MSG(r.bottom()<=top+0.5f,"width %d: %s is not in the first row",width,label);
         }
-        const auto more=value_control(s,"More tools",gui::Context::Role::Button);
         const auto undo=value_control(s,"Undo",gui::Context::Role::Button);
-        CHECK(more.y>=top);CHECK(std::fabs(undo.y-more.y)<1);CHECK(undo.right()<=width);
-        std::vector<std::string> labels;
-        for(const auto& group:tool_groups()) if(group.mode==mode)
-            for(const auto& def:tool_defs()) if(def.group==group.group) labels.push_back(def.label);
-        std::size_t tools=0;float rightmost=0;
+        CHECK(undo.y>=top);CHECK(undo.right()<=width);
+        CHECK_MSG(s.canvas_bounds().y<=150,"width %d mode %d: %g pt of chrome above the canvas",width,int(mode),s.canvas_bounds().y);
         std::vector<gui::Rect> header;
         for(const auto& item:s.accessible_ui()) if(item.role==gui::Context::Role::Button&&item.depth==0&&item.bounds.bottom()<=s.canvas_bounds().y+0.5f) {
             CHECK(item.bounds.x>=0);CHECK_MSG(item.bounds.right()<=width+0.5f,"%s overflows",item.label.c_str());
             for(const auto& other:header) CHECK_MSG(!item.bounds.deflate(gui::Insets::all(1)).intersects(other),"%s overlaps",item.label.c_str());
             header.push_back(item.bounds);
-            if(std::fabs(item.bounds.y-more.y)<1&&std::find(labels.begin(),labels.end(),item.label)!=labels.end()) {++tools;rightmost=std::max(rightmost,item.bounds.right());}
         }
-        CHECK_MSG(tools>=std::min<std::size_t>(labels.size(),width>1200?14:8),"width %d mode %d: %zu tools in the header",width,int(mode),tools);
-        if(tools<labels.size()) CHECK_MSG(more.x-rightmost<100,"width %d: %g px of empty toolbar",width,more.x-rightmost);
+        for(const auto* tool:toolbar_tools(mode)) CHECK_MSG(!value_control(s,tool->label,gui::Context::Role::Button).empty(),"width %d: %s not shown",width,tool->label);
+    }
+}
+
+TEST(workflow_toolbar_buttons_never_move_or_change_when_tools_change) {
+    for (auto mode : {Mode::Sketch, Mode::Solid, Mode::Drawing}) {
+        std::vector<gui::Icon> icons;
+        auto all=toolbar_tools(mode);
+        for(const auto* t:shape_tools(mode)) all.push_back(t);
+        for(const auto* t:all) {
+            CHECK_MSG(std::find(icons.begin(),icons.end(),t->icon)==icons.end(),"two %d-mode tools share the icon of %s",int(mode),t->label);
+            icons.push_back(t->icon);
+        }
+    }
+    struct Case {int width;bool tablet;};
+    for (auto mode : {Mode::Sketch, Mode::Solid, Mode::Drawing}) for (float w : {800.0f, 1600.0f, 2400.0f}) {
+        std::vector<ToolId> laid;
+        for(const auto& f:layout_toolbar(mode,{0,0,w,600},1.0f).groups) for(const auto* t:f.tools) laid.push_back(t->id);
+        std::vector<ToolId> fixed;
+        for(const auto* t:toolbar_tools(mode)) fixed.push_back(t->id);
+        CHECK_MSG(laid==fixed,"desktop toolbar order differs from the fixed order (mode %d, width %g)",int(mode),w);
+    }
+    for (const auto c : {Case{1032,true},Case{1376,true},Case{820,true},Case{1600,false}})
+    for (auto mode : {Mode::Sketch, Mode::Solid, Mode::Drawing}) {
+        Shell s=make_shell();s.set_viewport(c.width,1100);s.set_tablet_mode(c.tablet);s.set_mode(mode);s.build_frame();s.build_frame();
+        const auto snapshot=[&] {
+            std::vector<std::pair<std::string,gui::Rect>> out;
+            for(const auto* t:toolbar_tools(mode)) out.push_back({t->label,find_button(s,t->label)});
+            return out;
+        };
+        const auto base=snapshot();
+        for(const auto& [label,r]:base) CHECK_MSG(!r.empty(),"width %d: %s missing",c.width,label.c_str());
+        const auto same=[&](const char* after) {
+            const auto now=snapshot();
+            for(std::size_t i=0;i<base.size();++i) {
+                const auto& a=base[i].second;const auto& b=now[i].second;
+                CHECK_MSG(a.x==b.x&&a.y==b.y&&a.w==b.w&&a.h==b.h,"width %d mode %d: %s moved after %s",c.width,int(mode),base[i].first.c_str(),after);
+            }
+        };
+        for(const auto* t:tools_for_mode(mode)) {
+            if(!t->wired)continue;
+            s.activate_tool(t->id);s.build_frame();s.build_frame();
+            if(s.mode()!=mode) {s.set_mode(mode);s.build_frame();s.build_frame();continue;}
+            same(t->label);
+            s.activate_tool(ToolId::Select);s.build_frame();
+        }
+        for(const auto* shape:shape_tools(mode)) {
+            pointer_click(s,find_button(s,"Shapes"));
+            pointer_click(s,find_button(s,shape->label));
+            same(shape->label);
+            const Tool ct=shape->id==ToolId::Rect?Tool::Rect:shape->id==ToolId::Circle?Tool::Circle:shape->id==ToolId::Arc?Tool::Arc:Tool::Select;
+            if(mode!=Mode::Solid) for(const auto& m:Canvas::tool_modes(ct)) {
+                const auto seg=find_button(s,m);
+                if(!seg.empty()) {pointer_click(s,seg);same(m.c_str());}
+            }
+        }
+        s.set_mode(mode==Mode::Sketch?Mode::Solid:Mode::Sketch);s.build_frame();s.set_mode(mode);s.build_frame();s.build_frame();
+        same("a mode round trip");
     }
 }
 
@@ -10111,5 +10182,410 @@ TEST(workflow_document_and_layout_dropdowns_switch_close_and_create) {
         bool open=false;
         for(const auto& item:s.accessible_ui()) open|=item.depth==1&&item.label=="New layout";
         CHECK(!open);
+    }
+}
+
+TEST(pencil_tap_inside_a_closed_region_shows_the_pull_arrow) {
+    for (int drawn_with_pencil = 0; drawn_with_pencil < 2; ++drawn_with_pencil) {
+        Shell s = make_shell();
+        s.set_viewport(1376, 1032);
+        s.set_tablet_mode(true);
+        s.fit_width(14);
+        s.build_frame();
+        const auto at = [&](double u, double v, double& px, double& py) {
+            CHECK(s.camera().project(gview::Point3::from(u, v, 0.0), px, py));
+        };
+        double ax, ay, bx, by, cx, cy;
+        if (drawn_with_pencil) {
+            s.canvas().set_tool(Tool::Rect);
+            at(0.0, 0.0, ax, ay); at(4.0, 4.0, bx, by);
+            s.pointer_move(ax, ay); s.build_frame();
+            s.pointer_down(ax, ay);
+            s.pointer_move((ax + bx) / 2, (ay + by) / 2);
+            s.pointer_move(bx, by);
+            s.pencil_release(bx, by);
+        } else {
+            draw_rect(s, "0,0", "4,0", "4,4", "0,4");
+        }
+        s.build_frame();
+        at(2.0, 2.0, cx, cy);
+        s.pencil_tap(cx, cy);
+        s.build_frame();
+        CHECK_MSG(s.modeller().op() == Modeller::Op::Extrude && s.modeller().stage() == Modeller::Stage::Placed,
+                  "pencil tap inside the region (drawn_with_pencil=%d) left no pull arrow; tool=%d pending=%d",
+                  drawn_with_pencil, int(s.canvas().tool()), int(s.canvas().pending()));
+        CHECK(!s.canvas().pending());
+    }
+}
+
+TEST(pencil_tap_outside_any_region_still_places_the_tools_point) {
+    Shell s = make_shell();
+    s.set_viewport(1376, 1032);
+    s.set_tablet_mode(true);
+    s.fit_width(14);
+    draw_rect(s, "0,0", "4,0", "4,4", "0,4");
+    s.canvas().set_tool(Tool::Rect);
+    s.build_frame();
+    double px, py;
+    CHECK(s.camera().project(gview::Point3::from(6.0, 6.0, 0.0), px, py));
+    s.pencil_tap(px, py);
+    s.build_frame();
+    CHECK(s.canvas().tool() == Tool::Rect);
+    CHECK(s.canvas().pending());
+    CHECK(s.modeller().op() == Modeller::Op::None);
+}
+
+namespace {
+struct FingerRig {
+    Shell s = make_shell();
+    TouchState touch;
+    double clock = 0.0;
+    gcm::u64 next_id = 1;
+    FingerRig() {
+        s.set_dpr(2.0 * 1.15);
+        s.set_viewport(2752, 2064);
+        s.set_tablet_mode(true);
+        touch.settings.scale = 2.0;
+        s.build_frame();
+        s.build_frame();
+    }
+    void feed(const std::vector<TouchPoint>& pts) {
+        s.apply_gesture(touch.update(pts, clock));
+        s.build_frame();
+        clock += 1.0 / 60.0;
+    }
+    void tap(double x, double y, double hold, double wobble_pt) {
+        TouchPoint p;
+        p.id = next_id++;
+        p.kind = TouchKind::Finger;
+        p.down = true;
+        const int frames = std::max(1, int(hold * 60.0));
+        for (int i = 0; i < frames; ++i) {
+            const double k = frames > 1 ? double(i) / (frames - 1) : 0.0;
+            p.x = x + wobble_pt * 2.0 * k;
+            p.y = y - wobble_pt * 1.2 * k;
+            feed({p});
+        }
+        feed({});
+        s.build_frame();
+    }
+    bool find(const std::string& label, int depth, gui::Rect& out) const {
+        for (const auto& item : s.accessible_ui())
+            if (item.label == label && (depth < 0 || item.depth == depth) && !item.disabled) { out = item.bounds; return true; }
+        return false;
+    }
+    bool tap_label(const std::string& label, int depth, double hold, double wobble_pt) {
+        gui::Rect r;
+        if (!find(label, depth, r)) return false;
+        tap(r.x + r.w * 0.5, r.y + r.h * 0.5, hold, wobble_pt);
+        return true;
+    }
+};
+}
+
+TEST(finger_taps_with_realistic_jitter_press_header_controls_on_ipad) {
+    for (double hold : {0.08, 0.20, 0.32}) for (double wobble : {0.0, 3.0, 7.0}) {
+        FingerRig rig;
+        CHECK_MSG(rig.tap_label("Mode: Sketch", -1, hold, wobble), "no mode pill");
+        gui::Rect row;
+        CHECK_MSG(rig.find("Solid", 1, row), "hold %.2f wobble %.0f: the mode menu did not open", hold, wobble);
+        rig.tap_label("Solid", 1, hold, wobble);
+        CHECK_MSG(rig.s.mode() == Mode::Solid, "hold %.2f wobble %.0f: the Solid row did not switch modes", hold, wobble);
+
+        CHECK(rig.tap_label("Mode: Solid", -1, hold, wobble));
+        rig.tap_label("Sketch", 1, hold, wobble);
+        CHECK_MSG(rig.s.mode() == Mode::Sketch, "hold %.2f wobble %.0f: back to Sketch failed", hold, wobble);
+
+        CHECK(rig.tap_label("File", 0, hold, wobble));
+        bool menu_open = false;
+        for (const auto& item : rig.s.accessible_ui()) menu_open |= item.depth >= 1;
+        CHECK_MSG(menu_open, "hold %.2f wobble %.0f: the File menu did not open", hold, wobble);
+        rig.s.key_special(1);
+        rig.s.build_frame();
+
+        CHECK(rig.tap_label("Line", 0, hold, wobble));
+        CHECK_MSG(rig.s.active_tool() == ToolId::Line, "hold %.2f wobble %.0f: the Line button was not pressed", hold, wobble);
+    }
+}
+
+TEST(finger_drags_still_navigate_instead_of_pressing) {
+    FingerRig rig;
+    const auto before = rig.s.camera();
+    TouchPoint p;
+    p.id = 99;
+    p.kind = TouchKind::Finger;
+    p.down = true;
+    const auto c = rig.s.canvas_bounds();
+    for (int i = 0; i < 20; ++i) {
+        p.x = c.x + c.w * 0.5 + i * 20.0;
+        p.y = c.y + c.h * 0.5;
+        rig.feed({p});
+    }
+    rig.feed({});
+    double ax, ay, bx, by;
+    before.project(gview::Point3::from(10, 0, 0), ax, ay);
+    rig.s.camera().project(gview::Point3::from(10, 0, 0), bx, by);
+    CHECK_MSG(std::hypot(bx - ax, by - ay) > 50.0, "a finger drag did not move the view");
+    CHECK(rig.s.active_tool() == ToolId::Select);
+}
+
+namespace {
+Shell region_shell(Tool tool) {
+    Shell s = make_shell();
+    s.set_viewport(1376, 1032);
+    s.set_tablet_mode(true);
+    s.fit_width(14);
+    draw_rect(s, "0,0", "4,0", "4,4", "0,4");
+    s.canvas().set_tool(tool);
+    s.build_frame();
+    return s;
+}
+bool screen_at(Shell& s, double u, double v, double& x, double& y) {
+    return s.camera().project(gview::Point3::from(u, v, 0.0), x, y);
+}
+bool arrow_placed(Shell& s) {
+    return s.modeller().op() == Modeller::Op::Extrude && s.modeller().stage() == Modeller::Stage::Placed;
+}
+}
+
+TEST(pointer_click_inside_a_closed_region_shows_the_pull_arrow_with_a_drawing_tool) {
+    for (Tool tool : {Tool::Select, Tool::Rect, Tool::Line, Tool::Circle}) {
+        Shell s = region_shell(tool);
+        double x, y;
+        CHECK(screen_at(s, 2.0, 2.0, x, y));
+        s.pointer_input(Shell::PointerPhase::Down, x, y, false);
+        s.pointer_input(Shell::PointerPhase::Move, x + 1, y, false);
+        s.pointer_input(Shell::PointerPhase::Up, x + 1, y, false);
+        s.build_frame();
+        CHECK_MSG(arrow_placed(s), "tool %d: a pointer click inside the region left no arrow", int(tool));
+        CHECK(!s.canvas().pending());
+    }
+}
+
+TEST(pointer_drag_with_a_drawing_tool_still_draws) {
+    Shell s = region_shell(Tool::Line);
+    const auto before = s.canvas().shapes().size();
+    double ax, ay, bx, by;
+    CHECK(screen_at(s, 1.0, 1.0, ax, ay));
+    CHECK(screen_at(s, 3.0, 3.0, bx, by));
+    s.pointer_input(Shell::PointerPhase::Down, ax, ay, false);
+    for (int i = 1; i <= 10; ++i)
+        s.pointer_input(Shell::PointerPhase::Move, ax + (bx - ax) * i / 10.0, ay + (by - ay) * i / 10.0, false);
+    s.pointer_input(Shell::PointerPhase::Up, bx, by, false);
+    s.pointer_input(Shell::PointerPhase::Down, bx, by, false);
+    s.pointer_input(Shell::PointerPhase::Up, bx, by, false);
+    s.build_frame();
+    CHECK(s.modeller().op() == Modeller::Op::None);
+    CHECK(s.canvas().tool() == Tool::Line);
+    CHECK_MSG(s.canvas().shapes().size() > before || s.canvas().pending(),
+              "a pointer drag inside a region neither drew nor started a line");
+}
+
+TEST(pointer_clicks_press_header_controls_and_secondary_click_never_draws) {
+    FingerRig rig;
+    auto click = [&](const std::string& label, int depth) {
+        gui::Rect r;
+        CHECK_MSG(rig.find(label, depth, r), "missing %s", label.c_str());
+        const double x = r.x + r.w * 0.5, y = r.y + r.h * 0.5;
+        rig.s.pointer_move(x, y);
+        rig.s.build_frame();
+        rig.s.pointer_input(Shell::PointerPhase::Down, x, y, false);
+        rig.s.pointer_input(Shell::PointerPhase::Up, x, y, false);
+        rig.s.build_frame();
+        rig.s.build_frame();
+    };
+    click("Mode: Sketch", -1);
+    click("Solid", 1);
+    CHECK(rig.s.mode() == Mode::Solid);
+    click("Mode: Solid", -1);
+    click("Sketch", 1);
+    CHECK(rig.s.mode() == Mode::Sketch);
+    click("Line", 0);
+    CHECK(rig.s.active_tool() == ToolId::Line);
+    const auto c = rig.s.canvas_bounds();
+    rig.s.pointer_input(Shell::PointerPhase::Down, c.x + c.w * 0.5, c.y + c.h * 0.5, true);
+    rig.s.pointer_input(Shell::PointerPhase::Up, c.x + c.w * 0.5, c.y + c.h * 0.5, true);
+    rig.s.build_frame();
+    CHECK(!rig.s.canvas().pending());
+}
+
+TEST(finger_tap_inside_a_closed_region_shows_the_pull_arrow_with_a_drawing_tool) {
+    Shell s = region_shell(Tool::Rect);
+    double x, y;
+    CHECK(screen_at(s, 2.0, 2.0, x, y));
+    s.finger_tap(x, y);
+    s.build_frame();
+    CHECK(arrow_placed(s));
+    CHECK(!s.canvas().pending());
+}
+
+
+namespace {
+gtopo::Body plate_with_holes(const gcm::WorkingVolume& v) {
+    gtopo::Profile base;
+    base.outer={gcm::to_lattice(v,0,0),gcm::to_lattice(v,8,0),gcm::to_lattice(v,8,5),gcm::to_lattice(v,0,5)};
+    auto body=gtopo::extrude_z(base,v,1);
+    for (double cx:{2.5,5.5}) {
+        gtopo::Profile hole;
+        for (int i=0;i<64;++i) {const double t=6.283185307179586*i/64;hole.outer.push_back(gcm::to_lattice(v,cx+.8*std::cos(t),2.5+.8*std::sin(t)));}
+        auto frame=ggeo::d3::Frame<gcm::F64>::world_xy();frame.origin=gview::Point3::from(0,0,-.5);
+        const auto cut=gtopo::subtract(body,gtopo::extrude(hole,v,frame,2),v);
+        CHECK(cut.ok());if(cut.ok()) body=gtopo::merge_coplanar_faces(cut.body,v);
+    }
+    return body;
+}
+bool blend_ok(const Modeller& m,double r,bool round) {
+    const auto& b=m.bodies()[m.edge_body_index()];
+    return round ? gtopo::fillet_edge_exact(b,m.edge_halfedge(),r,12,kVol).ok
+                 : gtopo::chamfer_edge(b,m.edge_halfedge(),r,r,kVol).ok;
+}
+void pick_box_edge(Shell& s) {
+    s.set_mode(Mode::Solid);s.camera().look(gview::StandardView::Iso);s.build_frame();
+    s.activate_tool(ToolId::FilletEdge);s.build_frame();
+    click_at(s,2.0,0.0,3.0);s.build_frame();
+    CHECK(s.modeller().edge_kept());
+}
+void drag_slider(Shell& s,const char* label,double from,double to) {
+    const auto r=value_control(s,label,gui::Context::Role::Slider);
+    if (r.empty()) return;
+    const double y=r.y+r.h*.5,x0=r.x+r.w*from,x1=r.x+r.w*to;
+    s.pointer_move(x0,y);s.build_frame();
+    s.pointer_down(x0,y);s.build_frame();
+    for (int i=1;i<=6;++i) {s.pointer_move(x0+(x1-x0)*i/6,y);s.build_frame();}
+    s.pointer_up(x1,y);s.build_frame();s.build_frame();
+}
+}
+
+TEST(round_tool_picks_and_rounds_an_edge_by_pencil_finger_and_pointer_on_ipad) {
+    for (int path=0;path<3;++path) {
+        FingerRig rig;
+        auto& s=rig.s;
+        {Shell b=block_shell();s.modeller().add_body(b.modeller().bodies()[0],"Box");}
+        s.set_mode(Mode::Solid);s.fit_width(14);s.camera().look(gview::StandardView::Iso);
+        s.build_frame();s.build_frame();
+        gui::Rect button;
+        CHECK_MSG(rig.find("Fillet",-1,button),"no Fillet button in the Solid toolbar");
+        rig.tap(button.x+button.w/2,button.y+button.h/2,.1,0);
+        CHECK(s.modeller().op()==Modeller::Op::FilletEdge);
+        double px,py;CHECK(s.camera().project(gview::Point3::from(2.0,0.0,3.0),px,py));
+        if (path==0) s.pencil_tap(px,py);
+        else if (path==1) rig.tap(px,py,.1,0);
+        else {
+            s.pointer_input(Shell::PointerPhase::Move,px,py,false);
+            s.pointer_input(Shell::PointerPhase::Down,px,py,false);
+            s.pointer_input(Shell::PointerPhase::Up,px,py,false);
+        }
+        s.build_frame();
+        CHECK_MSG(s.modeller().edge_kept(),"path %d: the tapped edge was not picked (%s)",path,s.modeller().message().c_str());
+        gui::Rect field;
+        CHECK_MSG(rig.find("Round radius",-1,field),"path %d: no radius field",path);
+        const double before=gtopo::volume(s.modeller().bodies()[0],kVol);
+        rig.tap(field.x+field.w/2,field.y+field.h/2,.1,0);
+        for (char c:std::string("0.5")) s.key_char(std::string(1,c));
+        s.key_special(0);s.build_frame();
+        CHECK_MSG(gtopo::volume(s.modeller().bodies()[0],kVol)<before-1e-6,"path %d: the round removed nothing",path);
+        CHECK(s.modeller().edge_applied());
+    }
+}
+
+TEST(round_limit_is_the_largest_valid_size_for_a_box_edge) {
+    for (bool round:{true,false}) {
+        Shell s=block_shell();pick_box_edge(s);
+        if (!round) {s.command("CHAMFEREDGE");s.build_frame();}
+        CHECK(s.modeller().edge_limit_wait(10));
+        const double limit=s.modeller().edge_limit();
+        CHECK_MSG(limit>2.9 && limit<=3.0,"limit %g",limit);
+        CHECK_MSG(blend_ok(s.modeller(),limit,round),"the limit %g is not valid",limit);
+        CHECK_MSG(!blend_ok(s.modeller(),limit*1.05,round),"1.05x the limit is still valid");
+    }
+}
+
+TEST(round_limit_covers_several_edges_and_a_plate_with_holes) {
+    {
+        Shell s=make_shell();s.set_mode(Mode::Solid);
+        s.modeller().add_body(plate_with_holes(kVol),"Plate");
+        s.camera().look(gview::StandardView::Iso);s.camera().set_target(gview::Point3::from(4,2.5,.5));s.camera().set_distance(14);
+        s.build_frame();s.activate_tool(ToolId::FilletEdge);s.build_frame();
+        click_at(s,4.0,0.0,1.0);s.build_frame();CHECK(s.modeller().edge_kept());
+        CHECK(s.modeller().edge_limit_wait(20));
+        const double limit=s.modeller().edge_limit();
+        CHECK_MSG(limit>0.5 && limit<=1.0,"plate edge limit %g",limit);
+        CHECK(blend_ok(s.modeller(),limit,true));CHECK(!blend_ok(s.modeller(),limit*1.05,true));
+        s.modeller().set_typed(gunit::format_length(limit*.5,gunit::Format{s.canvas().display_unit()}));s.key_special(0);s.build_frame();
+        CHECK(s.modeller().edge_applied());
+    }
+    {
+        Shell s=make_shell();s.set_mode(Mode::Solid);auto& m=s.modeller();
+        {Shell b=block_shell();m.add_body(b.modeller().bodies()[0],"Box");}
+        s.camera().look(gview::StandardView::Iso);s.build_frame();
+        for (auto p:{gview::Point3::from(2,0,3),gview::Point3::from(4,2,3)}) {
+            double px,py;CHECK(s.camera().project(p,px,py));CHECK(m.toggle_edge_at(s.camera(),px,py));
+        }
+        CHECK(m.selected_edges().size()==2);CHECK(m.edge_kept());
+        CHECK(m.edge_limit_wait(20));
+        const double limit=m.edge_limit();
+        CHECK_MSG(limit>0.0 && limit<=3.0,"two-edge limit %g",limit);
+        m.set_typed(gunit::format_length(limit,gunit::Format{s.canvas().display_unit()}));
+        CHECK_MSG(m.value_preview_valid() && m.value_error().empty(),"the limit does not preview: %s",m.value_error().c_str());
+        m.set_typed(gunit::format_length(limit*1.05,gunit::Format{s.canvas().display_unit()}));
+        CHECK(m.value_error().find("Largest")!=std::string::npos);
+    }
+}
+
+TEST(round_slider_and_field_stay_in_sync_lifting_commits_and_undo_restores) {
+    Shell s=block_shell();pick_box_edge(s);
+    auto& m=s.modeller();
+    CHECK(m.edge_limit_wait(10));s.build_frame();
+    const double limit=m.edge_limit();
+    const double v0=gtopo::volume(m.bodies()[0],kVol);
+    drag_slider(s,"Round radius slider",.1,.5);
+    CHECK_MSG(m.edge_applied(),"lifting the slider did not commit (%s)",m.message().c_str());
+    CHECK_MSG(std::fabs(m.edge_value()-limit*.5)<limit*.03,"slider set %g, wanted about %g",m.edge_value(),limit*.5);
+    const double v1=gtopo::volume(m.bodies()[0],kVol);CHECK(v1<v0);
+    std::string announced;
+    for (const auto& item:s.accessible_ui()) if (item.label=="Round radius slider") announced=item.value;
+    CHECK_MSG(std::fabs(std::atof(announced.c_str())-m.edge_value())<limit*.01,"slider shows %s, round is %g",announced.c_str(),m.edge_value());
+    m.set_typed("1");s.build_frame();
+    for (const auto& item:s.accessible_ui()) if (item.label=="Round radius slider") announced=item.value;
+    CHECK_MSG(std::fabs(std::atof(announced.c_str())-1.0)<1e-3,"typing 1 left the slider at %s",announced.c_str());
+    s.key_special(0);s.build_frame();
+    CHECK(std::fabs(m.edge_value()-1.0)<1e-9);
+    m.set_typed("10");s.build_frame();
+    CHECK(m.value_error().find("Largest round here is")!=std::string::npos);
+    CHECK(m.value_preview_valid());
+    s.key_special(0);s.build_frame();
+    CHECK_MSG(std::fabs(m.edge_value()-limit)<1e-9,"typing 10 applied %g, limit %g",m.edge_value(),limit);
+    CHECK(m.message().find("the largest this edge allows")!=std::string::npos);
+    CHECK(m.bodies().size()==1);
+    s.key_special(1);s.build_frame();
+    CHECK(!m.edge_kept());
+    CHECK(m.undo());
+    CHECK_MSG(std::fabs(gtopo::volume(m.bodies()[0],kVol)-v0)<1e-6,"undo did not restore the box");
+}
+
+TEST(round_slider_works_with_finger_pencil_and_pointer_on_ipad) {
+    for (int path=0;path<3;++path) {
+        FingerRig rig;auto& s=rig.s;
+        {Shell b=block_shell();s.modeller().add_body(b.modeller().bodies()[0],"Box");}
+        s.set_mode(Mode::Solid);s.fit_width(14);s.camera().look(gview::StandardView::Iso);s.build_frame();
+        s.activate_tool(ToolId::FilletEdge);s.build_frame();
+        double px,py;CHECK(s.camera().project(gview::Point3::from(2.0,0.0,3.0),px,py));
+        s.pencil_tap(px,py);s.build_frame();
+        CHECK(s.modeller().edge_kept());CHECK(s.modeller().edge_limit_wait(10));s.build_frame();
+        gui::Rect r;CHECK_MSG(rig.find("Round radius slider",-1,r),"no slider");
+        CHECK_MSG(r.h>=44*2.0*1.15-1,"slider %gpx tall is below the 44pt touch target",r.h);
+        const double y=r.y+r.h*.5,x=r.x+r.w*.4;
+        if (path==0) rig.tap(x,y,.12,2);
+        else if (path==1) {
+            s.settle_pointer(x,y);s.pointer_down(x,y);s.build_frame();
+            s.pointer_move(x+2,y);s.build_frame();s.pencil_release(x+2,y);s.build_frame();s.build_frame();
+        } else {
+            s.pointer_input(Shell::PointerPhase::Move,x,y,false);s.build_frame();
+            s.pointer_input(Shell::PointerPhase::Down,x,y,false);s.build_frame();
+            s.pointer_input(Shell::PointerPhase::Up,x,y,false);s.build_frame();s.build_frame();
+        }
+        const double limit=s.modeller().edge_limit();
+        CHECK_MSG(s.modeller().edge_applied() && std::fabs(s.modeller().edge_value()-limit*.4)<limit*.05,
+                  "path %d: slider applied %g (limit %g, applied=%d)",path,s.modeller().edge_value(),limit,int(s.modeller().edge_applied()));
     }
 }

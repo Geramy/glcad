@@ -58,8 +58,8 @@ void TouchState::cursor_for(f64 x, f64 y, TouchKind kind, f64& out_x,
         return;
     }
     const f64 sign = settings.left_handed ? -1.0 : 1.0;
-    out_x = x + settings.finger_offset_x * sign;
-    out_y = y + settings.finger_offset_y;
+    out_x = x + settings.finger_offset_x * settings.scale * sign;
+    out_y = y + settings.finger_offset_y * settings.scale;
 }
 
 TouchResult TouchState::update(const std::vector<TouchPoint>& touches, f64 now) {
@@ -72,7 +72,8 @@ TouchResult TouchState::update(const std::vector<TouchPoint>& touches, f64 now) 
             Tracked u = *existing;
             u.x = t.x;
             u.y = t.y;
-            if (distance(u.start_x, u.start_y, u.x, u.y) > settings.tap_slop)
+            const f64 slop = u.kind == TouchKind::Pencil ? settings.tap_slop : settings.finger_tap_slop;
+            if (distance(u.start_x, u.start_y, u.x, u.y) > slop * settings.scale)
                 u.moved = true;
             kept.push_back(u);
         } else {
@@ -107,7 +108,8 @@ TouchResult TouchState::update(const std::vector<TouchPoint>& touches, f64 now) 
             out.gesture = Gesture::TwoFingerTap;
         } else if (long_press_fired_) {
             out.gesture = Gesture::None;
-        } else if (!last.moved && held <= settings.tap_seconds && peak_ == 1) {
+        } else if (!last.moved && peak_ == 1 &&
+                   held <= (last.kind == TouchKind::Pencil ? settings.tap_seconds : settings.finger_tap_seconds)) {
             out.gesture = Gesture::Tap;
         } else if (current_ == Gesture::Drag) {
             // Report the lift as a Drag so the platform closes its grab or stroke.
@@ -141,7 +143,7 @@ TouchResult TouchState::update(const std::vector<TouchPoint>& touches, f64 now) 
 
         if (!t.moved && !long_press_fired_ &&
             held >= settings.long_press_seconds &&
-            wander <= settings.long_press_slop) {
+            wander <= settings.long_press_slop * settings.scale) {
             long_press_fired_ = true;
             out.gesture = Gesture::LongPress;
             current_ = Gesture::LongPress;
@@ -219,7 +221,7 @@ TouchResult TouchState::update(const std::vector<TouchPoint>& touches, f64 now) 
 
     if (!committed_) {
         const f64 best = std::max({pan, spread, turn});
-        if (best < settings.two_finger_slop) {
+        if (best < settings.two_finger_slop * settings.scale) {
             out.gesture = Gesture::None;
             last_centre_x_ = cx;
             last_centre_y_ = cy;

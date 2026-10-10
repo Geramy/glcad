@@ -569,7 +569,7 @@ bool slider(Context& c, const Rect& r, std::string_view id_label, f32& value,
         if (next != value) { value = next; changed = true; }
     }
 
-    const f32 track_h = 4.0f;
+    const f32 track_h = std::max(4.0f, r.h * 0.08f);
     const Rect track{r.x, r.centre().y - track_h * 0.5f, r.w, track_h};
     c.draw().round_rect(track, track_h * 0.5f, tok(c, T::ui_background));
 
@@ -577,7 +577,7 @@ bool slider(Context& c, const Rect& r, std::string_view id_label, f32& value,
     const Rect filled{track.x, track.y, track.w * t, track.h};
     c.draw().round_rect(filled, track_h * 0.5f, tok(c, T::ui_accent));
 
-    const f32 knob = 12.0f;
+    const f32 knob = std::max(12.0f, r.h * 0.42f);
     const Rect kr{r.x + r.w * t - knob * 0.5f, r.centre().y - knob * 0.5f, knob, knob};
     c.draw().round_rect(kr, knob * 0.5f,
                         surface_for(c, in, tok(c, T::ui_surface_raised)));
